@@ -165,14 +165,32 @@ def test_start_clears_listener_failure() -> None:
     with _CountingListener() as upstream:
         health = BridgeHealth(upstream.address, probe_interval=0.05)
         health.start()
+        _wait_state(health, BridgeState.RUNNING)
+        health.listener_failed()
+        assert health.state is BridgeState.ERROR
+        health.stop()
+        # A real restart is a new attempt: the caller rebound the Listeners
+        # successfully, so the next successful Probe means Running again.
+        health.start()
+        try:
+            _wait_state(health, BridgeState.RUNNING)
+        finally:
+            health.stop()
+
+
+def test_noop_start_keeps_listener_failure_error() -> None:
+    with _CountingListener() as upstream:
+        health = BridgeHealth(upstream.address, probe_interval=0.05)
+        health.start()
         try:
             _wait_state(health, BridgeState.RUNNING)
             health.listener_failed()
             assert health.state is BridgeState.ERROR
-            # A new start is a new attempt: the caller rebound the Listeners
-            # successfully, so the next successful Probe means Running again.
+            # start() with a live Probe is a pure no-op: the sticky Error
+            # survives successful Probes while the Listener is still down.
             health.start()
-            _wait_state(health, BridgeState.RUNNING)
+            time.sleep(0.2)
+            assert health.state is BridgeState.ERROR
         finally:
             health.stop()
 

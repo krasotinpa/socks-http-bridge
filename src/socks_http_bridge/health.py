@@ -62,19 +62,19 @@ class BridgeHealth:
     def start(self) -> None:
         """Start the periodic Probe; state follows Upstream reachability.
 
-        Idempotent: a running Probe is never duplicated. Listener failures
-        are reset — a new start is a new attempt, and a caller that rebinds
-        Listeners reports fresh failures via listener_failed(). After
-        stop(), waits for the old Probe to exit (bounded by the Probe
-        timeout) before starting the new one.
+        A repeated start() with a live Probe is a pure no-op. On an actual
+        (re)start Listener failures are reset — a new start is a new
+        attempt, and a caller that rebinds Listeners reports fresh failures
+        via listener_failed(). After stop(), waits for the old Probe to
+        exit (bounded by the Probe timeout) before starting the new one.
         """
-        with self._lock:
-            self._listener_failed = False
         thread = self._thread
         if thread is not None and thread.is_alive():
             if not self._stop.is_set():
-                return  # Probe already running
+                return  # Probe already running: no state change at all
             thread.join(PROBE_TIMEOUT + 1.0)
+        with self._lock:
+            self._listener_failed = False
         self._stop.clear()
         self._thread = threading.Thread(target=self._probe_loop, daemon=True,
                                         name="probe")
