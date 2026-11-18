@@ -5,19 +5,48 @@ window on its own thread (Tk is thread-affine). Apply saves Config and
 restarts the Listeners immediately on a worker thread: active Tunnels drop,
 clients reconnect on their own, and the UI never blocks. Validation reuses
 config.py (``Config.validate`` / ``ConfigError``); messages show inline and
-the window stays open. The Autostart checkbox only reads/writes
-``config.autostart`` — the Startup shortcut itself is issue #8.
+the window stays open. Autostart (issue #8): the checkbox reflects the real
+Startup shortcut on open (reality beats a stale ``config.autostart``); OK
+creates/removes the shortcut through the #15 core before Applying, targeting
+``pythonw.exe -m socks_http_bridge --tray`` (no console at logon). Shortcut
+failures show inline and keep the window open, like validation errors.
 """
 
+import ipaddress
+import os
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from socks_http_bridge import autostart
 from socks_http_bridge.config import Config, ConfigError
 
 if TYPE_CHECKING:
     from socks_http_bridge.tray import TrayShell
+
+TRAY_ARGUMENTS = "-m socks_http_bridge --tray"
+
+
+def _startup_dir() -> Path:
+    """The per-user Startup folder (the #15 core takes it as a parameter)."""
+    return (Path(os.environ["APPDATA"])
+            / "Microsoft/Windows/Start Menu/Programs/Startup")
+
+
+def sync_autostart(desired: bool) -> None:
+    """Create/remove the real Startup shortcut to match ``desired``; no-op
+    when already in sync. Raises OSError / CalledProcessError on failure."""
+    startup = _startup_dir()
+    present = autostart.shortcut_exists(startup)
+    if desired and not present:
+        autostart.create_shortcut(
+            startup, Path(sys.executable).with_name("pythonw.exe"),
+            arguments=TRAY_ARGUMENTS)
+    elif present and not desired:
+        autostart.remove_shortcut(startup)
 
 
 def config_from_form(*, listeners: list[str], upstream: str, autostart: bool,
@@ -50,7 +79,12 @@ def lan_warning(listeners: list[str]) -> str | None:
 
 def _is_loopback(address: str) -> bool:
     host = address.rpartition(":")[0].lower()
-    return host.startswith("127.") or host in {"localhost", "::1", "[::1]"}
+    if host in {"localhost", "[::1]"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False  # a hostname is conservatively non-loopback: warn
 
 
 def apply_config(shell: "TrayShell", cfg: Config,
@@ -104,7 +138,9 @@ class SettingsForm:
             row=2, column=2, padx=(4, 8))
 
         self.upstream = self._field(root, 3, "Upstream (SOCKS5)", cfg.upstream)
-        self.autostart = tk.BooleanVar(value=cfg.autostart)
+        # Reality beats a stale config.autostart: check the real shortcut.
+        self.autostart = tk.BooleanVar(
+            value=autostart.shortcut_exists(_startup_dir()))
         tk.Checkbutton(root, text="Start with Windows (Autostart)",
                        variable=self.autostart).grid(
             row=4, column=0, columnspan=3, sticky="w", padx=8)
@@ -160,6 +196,12 @@ class SettingsForm:
                 log_path=self.log_path.get(), test_url=self.test_url.get())
         except ConfigError as exc:
             self.error.config(text=str(exc))
+            return
+        try:
+            # Before Apply/close so a shortcut failure shows inline (#7 UX).
+            sync_autostart(cfg.autostart)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            self.error.config(text=f"Cannot update the Autostart shortcut: {exc}")
             return
         self.error.config(text="")
         threading.Thread(target=self._apply_worker, args=(cfg,),
