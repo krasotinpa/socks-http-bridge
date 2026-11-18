@@ -1,6 +1,7 @@
 """Integration tests at the Tunneling seam: real sockets, fake Upstream."""
 
 import socket
+import time
 
 from fake_upstream import FakeUpstream
 from targets import EchoTarget, EofMarkerTarget, RecordingHttpTarget
@@ -143,3 +144,18 @@ def test_half_close_propagates_through_tunnel(start_bridge, bridge_client):
         assert recv_exact(client, 27) == b"eof-seen:last request bytes"
         # The remote half-close travels back: the client reads EOF, not a hang.
         assert client.recv(65536) == b""
+
+
+def test_established_tunnel_has_no_idle_timeout(start_bridge, bridge_client):
+    with EchoTarget() as target, FakeUpstream(target.address) as upstream:
+        listener = start_bridge(upstream.address)
+        client = bridge_client(listener, timeout=45.0)
+        establish_connect_tunnel(client)
+
+        # Idle longer than any timeout the core uses during setup (25 s SOCKS5
+        # handshake, 30 s header read): a timeout left on either Tunnel socket
+        # would silently kill the relay during this wait.
+        time.sleep(31)
+
+        client.sendall(b"still alive")
+        assert recv_exact(client, 11) == b"still alive"

@@ -114,12 +114,12 @@ def handle(client: socket.socket, addr: tuple[str, int],
             log.info("CONNECT %s:%s", host, port)
         else:
             url = urlsplit(target)
-            host = url.hostname
-            if not host:
+            url_host = url.hostname
+            if not url_host:
                 client.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
                 return
             port = url.port or 80
-            remote = socks5_connect(socks_host, socks_port, host, port)
+            remote = socks5_connect(socks_host, socks_port, url_host, port)
             path = url.path or "/"
             if url.query:
                 path += "?" + url.query
@@ -132,7 +132,7 @@ def handle(client: socket.socket, addr: tuple[str, int],
                 fwd.append(line)
             remote.sendall(("\r\n".join(fwd) + "\r\n\r\n").encode("latin-1")
                            + body)
-            log.info("%s %s://%s%s", method, url.scheme, host, path)
+            log.info("%s %s://%s%s", method, url.scheme, url_host, path)
 
         client.settimeout(None)
         t1 = threading.Thread(target=pipe, args=(client, remote), daemon=True)
@@ -141,7 +141,7 @@ def handle(client: socket.socket, addr: tuple[str, int],
         t2.start()
         t1.join()
         t2.join()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any failure must yield 502, never crash
         log.warning("%s -> %s", addr[0], exc)
         try:
             client.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")

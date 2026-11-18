@@ -6,6 +6,7 @@ handler thread per connection, like a real remote host would.
 
 import socket
 import threading
+from typing import Self
 
 
 class _Target:
@@ -24,7 +25,7 @@ class _Target:
     def address(self) -> tuple[str, int]:
         return self._listener.getsockname()
 
-    def __enter__(self) -> "_Target":
+    def __enter__(self) -> Self:
         self._thread.start()
         return self
 

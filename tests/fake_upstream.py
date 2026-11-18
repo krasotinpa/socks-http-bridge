@@ -11,6 +11,7 @@ import socket
 import struct
 import threading
 from dataclasses import dataclass
+from typing import Self
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,7 @@ class FakeUpstream:
     def address(self) -> tuple[str, int]:
         return self._listener.getsockname()
 
-    def __enter__(self) -> "FakeUpstream":
+    def __enter__(self) -> Self:
         self._thread.start()
         return self
 
