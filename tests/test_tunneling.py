@@ -3,7 +3,7 @@
 import socket
 
 from fake_upstream import FakeUpstream
-from targets import EchoTarget, RecordingHttpTarget
+from targets import EchoTarget, EofMarkerTarget, RecordingHttpTarget
 
 
 def recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -127,3 +127,19 @@ def test_dead_upstream_yields_502_to_client(start_bridge, bridge_client):
         b"CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n"
     )
     assert read_http_head(client) == b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
+
+
+def test_half_close_propagates_through_tunnel(start_bridge, bridge_client):
+    with EofMarkerTarget() as target, FakeUpstream(target.address) as upstream:
+        listener = start_bridge(upstream.address)
+        client = bridge_client(listener)
+        establish_connect_tunnel(client)
+
+        client.sendall(b"last request bytes")
+        client.shutdown(socket.SHUT_WR)
+
+        # The marker only leaves the remote host after it has seen EOF, so
+        # receiving it proves the client's SHUT_WR crossed the whole Tunnel.
+        assert recv_exact(client, 27) == b"eof-seen:last request bytes"
+        # The remote half-close travels back: the client reads EOF, not a hang.
+        assert client.recv(65536) == b""
