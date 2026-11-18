@@ -24,7 +24,7 @@ import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from socks_http_bridge.config import Config, ConfigError
+from socks_http_bridge.config import Config, ConfigError, parse_address
 from socks_http_bridge.tunneling import handle, log
 
 
@@ -55,24 +55,22 @@ def main() -> None:
 
     try:
         cfg = Config.load(Path(args.config) if args.config else None)
+        # CLI flags override Config; every address passes the same validation.
+        listeners = [args.listen] if args.listen else cfg.listeners
+        upstream = args.socks or cfg.upstream
+        socks_host, socks_port = parse_address(
+            upstream, "--socks" if args.socks else "upstream")
+        addresses = [
+            parse_address(listen, "--listen" if args.listen else "listeners")
+            for listen in listeners]
     except ConfigError as exc:
         print(f"Config error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # CLI flags override Config; without them Config alone drives the Bridge.
-    listeners = [args.listen] if args.listen else cfg.listeners
-    upstream = args.socks or cfg.upstream
-    socks_host, _, socks_port_text = upstream.rpartition(":")
-    socks_host = socks_host or "127.0.0.1"
-    socks_port = int(socks_port_text)
-
     _setup_logging(args.log or os.path.expandvars(cfg.log_path), args.verbose)
 
     servers: list[socket.socket] = []
-    for listen in listeners:
-        listen_host, _, listen_port_text = listen.rpartition(":")
-        listen_host = listen_host or "127.0.0.1"
-        listen_port = int(listen_port_text)
+    for listen_host, listen_port in addresses:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         srv.bind((listen_host, listen_port))

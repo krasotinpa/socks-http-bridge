@@ -21,7 +21,7 @@ def default_config_path() -> Path:
     return Path(base) / "socks-http-bridge" / "config.json"
 
 
-def _parse_address(value: object, name: str) -> tuple[str, int]:
+def parse_address(value: object, name: str) -> tuple[str, int]:
     """Split a host:port address, rejecting ports outside 1..65535."""
     if not isinstance(value, str):
         raise ConfigError(f"{name}: expected a host:port string, got {value!r}")
@@ -79,13 +79,14 @@ class Config:
         if not isinstance(self.listeners, list) or not self.listeners:
             raise ConfigError(
                 "listeners must be a non-empty list of host:port addresses")
-        seen: set[str] = set()
+        # Dedup on the parsed address so 8118 and 08118 are one Listener.
+        seen: set[tuple[str, int]] = set()
         for listener in self.listeners:
-            _parse_address(listener, "listeners")
-            if listener in seen:
+            address = parse_address(listener, "listeners")
+            if address in seen:
                 raise ConfigError(f"duplicate Listener {listener!r} in listeners")
-            seen.add(listener)
-        _parse_address(self.upstream, "upstream")
+            seen.add(address)
+        parse_address(self.upstream, "upstream")
         if not isinstance(self.autostart, bool):
             raise ConfigError(f"autostart must be a boolean, got {self.autostart!r}")
         if (isinstance(self.probe_interval, bool)

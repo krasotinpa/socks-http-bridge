@@ -6,6 +6,7 @@ Upstream. The real %LOCALAPPDATA% Config, the live Bridge on 127.0.0.1:8118
 and the AdGuard Upstream on 127.0.0.1:9090 are never touched.
 """
 
+import io
 import json
 import os
 import socket
@@ -175,20 +176,62 @@ def test_cli_flags_override_config(tmp_path: Path, bridge_client) -> None:
             proc.wait(timeout=10)
 
 
-def test_logging_rotates_2mb_x2_and_creates_parent_dirs(tmp_path: Path) -> None:
+def test_logging_rotates_2mb_x2_and_creates_parent_dirs(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from socks_http_bridge.__main__ import _setup_logging
     from socks_http_bridge.tunneling import log
 
+    # Keep the ~60k probe records off the console when pytest runs with -s.
+    monkeypatch.setattr(sys, "stderr", io.StringIO())
     log_path = tmp_path / "deep" / "nested" / "bridge.log"
     _setup_logging(str(log_path), verbose=False)
+    rotating = [h for h in log.handlers if isinstance(h, RotatingFileHandler)]
     try:
-        rotating = [h for h in log.handlers
-                    if isinstance(h, RotatingFileHandler)]
         assert len(rotating) == 1
         assert rotating[0].maxBytes == 2_000_000
         assert rotating[0].backupCount == 2
         assert log_path.parent.is_dir()
+
+        # ~7.9 MB of records: three rollovers, so the oldest lines are
+        # evicted past bridge.log.2 and each file holds a newer span.
+        for i in range(60_000):
+            log.info("rotation-probe %06d %s", i, "x" * 80)
+        backup1 = log_path.with_name(log_path.name + ".1")
+        backup2 = log_path.with_name(log_path.name + ".2")
+        assert backup1.exists()
+        assert backup2.exists()
+        assert log_path.stat().st_size < 2_000_000
+
+        def first_marker(path: Path) -> int:
+            with path.open(encoding="utf-8") as f:
+                line = f.readline()
+            return int(line.split("rotation-probe ")[1][:6])
+
+        assert first_marker(backup2) < first_marker(backup1) < first_marker(log_path)
+        for path in (log_path, backup1, backup2):
+            assert "rotation-probe 000000" not in path.read_text(encoding="utf-8")
     finally:
         for h in rotating:
             log.removeHandler(h)
             h.close()
+
+
+@pytest.mark.parametrize(("flag", "value"), [
+    ("--listen", "garbage"),
+    ("--listen", "127.0.0.1:99999"),
+    ("--socks", "garbage"),
+    ("--socks", "127.0.0.1:0"),
+])
+def test_cli_invalid_flag_exits_with_readable_error(
+        tmp_path: Path, flag: str, value: str) -> None:
+    # A valid Config file isolates the failure to the flag itself.
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "socks_http_bridge",
+         "--config", str(config_path), flag, value],
+        capture_output=True, text=True, timeout=30, check=False)
+    assert proc.returncode != 0
+    assert "Config error" in proc.stderr
+    assert flag in proc.stderr
+    assert "Traceback" not in proc.stderr

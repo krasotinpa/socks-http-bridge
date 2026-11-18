@@ -55,6 +55,7 @@ def test_partial_file_fills_defaults(tmp_path: Path) -> None:
     ({"listeners": "127.0.0.1:8118"}, "listeners"),
     ({"listeners": [8118]}, "listeners"),
     ({"listeners": ["127.0.0.1:8118", "127.0.0.1:8118"]}, "duplicate"),
+    ({"listeners": ["127.0.0.1:8118", "127.0.0.1:08118"]}, "duplicate"),
     ({"listeners": ["127.0.0.1:0"]}, "port"),
     ({"listeners": ["127.0.0.1:65536"]}, "port"),
     ({"listeners": ["127.0.0.1:http"]}, "port"),
