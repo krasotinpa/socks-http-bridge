@@ -7,12 +7,14 @@ with remote DNS resolution (SOCKS5h semantics).
 Stdlib only. Run:
     pythonw.exe -m socks_http_bridge            (no console window)
     python.exe  -m socks_http_bridge --verbose  (console + debug)
+    pythonw.exe -m socks_http_bridge --tray     (Tray Shell: icon + menu)
 
 Options:
     --config PATH        Config file (default %LOCALAPPDATA%\\socks-http-bridge\\config.json)
     --listen HOST:PORT   override the Config Listeners with a single Listener
     --socks  HOST:PORT   override the Config Upstream
     --log    PATH        override the Config log path
+    --tray               run as the Tray Shell (single instance, tray icon)
 """
 
 import argparse
@@ -52,6 +54,7 @@ def main() -> None:
     ap.add_argument("--socks", default=None)
     ap.add_argument("--log", default=None)
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--tray", action="store_true")
     args = ap.parse_args()
 
     try:
@@ -69,6 +72,13 @@ def main() -> None:
         sys.exit(1)
 
     _setup_logging(args.log or os.path.expandvars(cfg.log_path), args.verbose)
+
+    if args.tray:
+        # Lazy import: the headless path stays stdlib-only (no pystray/PIL).
+        from socks_http_bridge import tray
+        tray.run(cfg, addresses, (socks_host, socks_port),
+                 args.log or os.path.expandvars(cfg.log_path))
+        return
 
     health = BridgeHealth((socks_host, socks_port),
                           probe_interval=cfg.probe_interval)
