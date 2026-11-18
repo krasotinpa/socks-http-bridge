@@ -112,3 +112,18 @@ def test_socks5_request_sends_hostname_as_atyp3_for_remote_dns(start_bridge,
 
         client.sendall(b"remote-dns works")
         assert recv_exact(client, 16) == b"remote-dns works"
+
+
+def test_dead_upstream_yields_502_to_client(start_bridge, bridge_client):
+    # Reserve an ephemeral port and release it: nothing listens there now.
+    dead = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    dead.bind(("127.0.0.1", 0))
+    dead_port = dead.getsockname()[1]
+    dead.close()
+
+    listener = start_bridge(("127.0.0.1", dead_port))
+    client = bridge_client(listener)
+    client.sendall(
+        b"CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n"
+    )
+    assert read_http_head(client) == b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
