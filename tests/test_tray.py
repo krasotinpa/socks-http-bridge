@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import tkinter as tk
 from collections.abc import Callable
 from pathlib import Path
 
@@ -223,7 +224,8 @@ def test_bind_failure_keeps_error_until_restart(tmp_path: Path) -> None:
         upstream.close()
 
 
-def test_menu_wires_status_stubs_and_actions(tmp_path: Path) -> None:
+def test_menu_wires_status_stubs_and_actions(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = str(tmp_path / "bridge.log")
     cfg = Config(listeners=["127.0.0.1:8118", "127.0.0.1:8119"],
                  upstream="127.0.0.1:9090", log_path=log_path)
@@ -239,10 +241,38 @@ def test_menu_wires_status_stubs_and_actions(tmp_path: Path) -> None:
     assert "Stop" in {item.text for item in shell.menu.items}
     for label in ("Open log", "Exit", "Exit IP Test", "Settings"):
         assert label in items
+    # Exit IP Test (#6): no Listener is bound, so the daemon worker balloons.
     items["Exit IP Test"](icon)
-    assert "not implemented yet" in icon.notifications[-1][0]
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not icon.notifications:
+        time.sleep(0.02)
+    assert icon.notifications, "Exit IP Test worker never notified"
+    assert "no Listener is bound" in icon.notifications[-1][0]
+    # Settings (#7): the menu opens the real window on its own thread.
+    # Build it on a withdrawn root with mainloop stubbed: no visible window.
+    # Tk is thread-affine, so the checks run inside the stubbed mainloop,
+    # which executes on the window thread after SettingsForm is built.
+    real_tk = tk.Tk  # capture before patching the module attribute
+    seen: dict[str, object] = {}
+    done = threading.Event()
+
+    def withdrawn_tk() -> tk.Tk:
+        root = real_tk()
+        root.withdraw()
+        return root
+
+    def fake_mainloop(self: tk.Tk) -> None:
+        seen["title"] = self.title()
+        seen["thread"] = threading.current_thread()
+        self.destroy()
+        done.set()
+
+    monkeypatch.setattr(tray.settings.tk, "Tk", withdrawn_tk)
+    monkeypatch.setattr(real_tk, "mainloop", fake_mainloop)
     items["Settings"](icon)
-    assert "not implemented yet" in icon.notifications[-1][0]
+    assert done.wait(3), "Settings window never reached mainloop"
+    assert seen["title"] == "Socks HTTP Bridge — Settings"
+    assert seen["thread"] is not threading.current_thread()
 
 
 def test_open_log_opens_config_log_path(tmp_path: Path,
