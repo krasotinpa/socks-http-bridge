@@ -17,17 +17,27 @@ conversation has one reader, the repository has many.
   the branch rule already keeps `main` safe and waiting for confirmation only delays
   review. Merging stays with the maintainer, or with an agent the maintainer explicitly
   delegated to deliver the task end to end.
+- Implementation follows the matt-pocock implement skill: tdd at the agreed seams,
+  regular typecheck and single-file test runs, full suite at the end, then the
+  code-review skill before opening the PR.
 - **Checks**: this repository has no CI, so run the checks locally before opening or
   updating a PR and put a summary of what ran and how it ended in the PR body:
 
   ```
-  pytest
-  ruff check .
-  mypy src
+  uv run pytest
+  uv run ruff check .
+  uv run mypy src
   ```
+
+  The project is uv-managed: `uv sync` creates `.venv` and installs the runtime and
+  dev dependencies; `uv run` executes commands inside that environment. On this
+  machine pass `--python C:\Users\krasotin\AppData\Local\Python\bin\python.exe` to
+  `uv sync`, since uv may not find the install-manager Python on its own.
 
 ## Scope of a change
 
+- Write code in ponytail mode (the `ponytail` skill): the smallest change that fully
+  solves the task — reuse what exists, no unrequested abstractions.
 - Implement every behaviour the task asks for, completely, and nothing beyond it. A
   pre-existing bug, a performance concern or behaviour the task doesn't mention is a
   follow-up to report in your summary, not something to fix in this change, unless the
