@@ -90,3 +90,25 @@ def test_plain_http_forwarding_strips_proxy_hop_by_hop_headers(start_bridge,
         assert "x-custom" in names
         assert forwarded_body == b"body-bytes!"
         assert upstream.requests[0].host == b"example.test"
+
+
+def test_socks5_request_sends_hostname_as_atyp3_for_remote_dns(start_bridge,
+                                                               bridge_client):
+    # A name that does not resolve on this machine: the Tunnel can only work
+    # if the hostname travels to the Upstream as-is (ATYP=3, remote DNS).
+    name = "remote-dns-only.example.test"
+    with EchoTarget() as target, FakeUpstream(target.address) as upstream:
+        listener = start_bridge(upstream.address)
+        client = bridge_client(listener)
+        establish_connect_tunnel(client, host=name, port=8443)
+
+        assert len(upstream.requests) == 1
+        request = upstream.requests[0]
+        assert request.command == 1  # CONNECT
+        assert request.atyp == 3  # domain name, not a pre-resolved IP
+        assert request.host == name.encode("ascii")
+        assert request.port == 8443
+        assert b"\x00" in request.methods  # no-auth offered
+
+        client.sendall(b"remote-dns works")
+        assert recv_exact(client, 16) == b"remote-dns works"
