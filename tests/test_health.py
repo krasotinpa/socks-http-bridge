@@ -143,3 +143,50 @@ def test_listener_failure_sets_error_and_keeps_it() -> None:
                                    (BridgeState.RUNNING, BridgeState.ERROR)]
         finally:
             health.stop()
+
+
+def test_double_start_keeps_a_single_probe() -> None:
+    with _CountingListener() as upstream:
+        health = BridgeHealth(upstream.address, probe_interval=0.2)
+        health.start()
+        try:
+            _wait_state(health, BridgeState.RUNNING)
+            health.start()  # idempotent: must not spawn a second Probe
+            count_before = upstream.count
+            time.sleep(1.0)
+            delta = upstream.count - count_before
+            # ~5 Probes in 1 s at a 0.2 s interval; two Probes would double it.
+            assert 2 <= delta <= 7, delta
+        finally:
+            health.stop()
+
+
+def test_start_clears_listener_failure() -> None:
+    with _CountingListener() as upstream:
+        health = BridgeHealth(upstream.address, probe_interval=0.05)
+        health.start()
+        try:
+            _wait_state(health, BridgeState.RUNNING)
+            health.listener_failed()
+            assert health.state is BridgeState.ERROR
+            # A new start is a new attempt: the caller rebound the Listeners
+            # successfully, so the next successful Probe means Running again.
+            health.start()
+            _wait_state(health, BridgeState.RUNNING)
+        finally:
+            health.stop()
+
+
+def test_stop_then_start_resumes_probe() -> None:
+    port = _closed_port()
+    health = BridgeHealth(("127.0.0.1", port), probe_interval=0.05)
+    health.start()
+    _wait_state(health, BridgeState.ERROR)
+    health.stop()
+    assert health.state is BridgeState.STOPPED
+    try:
+        with _CountingListener(port):
+            health.start()
+            _wait_state(health, BridgeState.RUNNING)
+    finally:
+        health.stop()

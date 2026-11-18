@@ -73,6 +73,7 @@ def main() -> None:
     health = BridgeHealth((socks_host, socks_port),
                           probe_interval=cfg.probe_interval)
     servers: list[socket.socket] = []
+    bind_failed = False
     for listen_host, listen_port in addresses:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -85,7 +86,7 @@ def main() -> None:
             srv.close()
             log.error("Listener %s:%s failed to bind: %s",
                       listen_host, listen_port, exc)
-            health.listener_failed()
+            bind_failed = True
             continue
         servers.append(srv)
         log.info("HTTP proxy on %s:%s -> SOCKS5 %s:%s",
@@ -94,6 +95,9 @@ def main() -> None:
         log.error("No Listener could take its port; exiting")
         sys.exit(1)
     health.start()
+    if bind_failed:
+        # After start(): start() resets Listener failures, a new attempt.
+        health.listener_failed()
 
     def _accept_loop(srv: socket.socket) -> None:
         while True:

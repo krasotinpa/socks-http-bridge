@@ -51,8 +51,9 @@ def test_cli_bind_failure_logs_error_and_other_listeners_serve(
             assert f"127.0.0.1:{taken_port}" in log_text
             # Error from the bind failure; the healthy Upstream Probe must
             # not flap it back to Running while the Listener is still down.
-            assert log_text.count("Bridge State:") == 1
-            assert "Bridge State: Stopped -> Error" in log_text
+            # (The first Probe may land before or after the bind failure.)
+            assert "-> Error" in log_text
+            assert "Error -> Running" not in log_text
         finally:
             proc.terminate()
             proc.wait(timeout=10)
@@ -78,6 +79,6 @@ def test_cli_all_listeners_fail_exits_nonzero(tmp_path: Path) -> None:
         assert "Traceback" not in proc.stderr
         log_text = log_path.read_text(encoding="utf-8")
         assert "failed to bind" in log_text
-        assert "Bridge State: Stopped -> Error" in log_text
+        assert "No Listener could take its port" in log_text
     finally:
         taken.close()

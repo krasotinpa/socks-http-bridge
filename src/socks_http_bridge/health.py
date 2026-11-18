@@ -39,6 +39,7 @@ class BridgeHealth:
         self._listener_failed = False
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
         self._subscribers: list[Callable[[BridgeState, BridgeState], None]] = []
 
     @property
@@ -51,15 +52,33 @@ class BridgeHealth:
 
         Called from the Probe thread; the Tray Shell must marshal to its own
         loop. Callbacks run outside the state lock, so they may read state.
+        Ordering contract: transitions are serialized by the lock, but under
+        thread races callback delivery order may differ from transition
+        order. An event is a hint — read ``state`` for the current value.
         """
         with self._lock:
             self._subscribers.append(callback)
 
     def start(self) -> None:
-        """Start the periodic Probe; state follows Upstream reachability."""
+        """Start the periodic Probe; state follows Upstream reachability.
+
+        Idempotent: a running Probe is never duplicated. Listener failures
+        are reset — a new start is a new attempt, and a caller that rebinds
+        Listeners reports fresh failures via listener_failed(). After
+        stop(), waits for the old Probe to exit (bounded by the Probe
+        timeout) before starting the new one.
+        """
+        with self._lock:
+            self._listener_failed = False
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            if not self._stop.is_set():
+                return  # Probe already running
+            thread.join(PROBE_TIMEOUT + 1.0)
         self._stop.clear()
-        threading.Thread(target=self._probe_loop, daemon=True,
-                         name="probe").start()
+        self._thread = threading.Thread(target=self._probe_loop, daemon=True,
+                                        name="probe")
+        self._thread.start()
 
     def stop(self) -> None:
         """User stop: Stopped, and an in-flight Probe cannot flip it."""
