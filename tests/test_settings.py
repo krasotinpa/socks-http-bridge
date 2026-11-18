@@ -245,6 +245,18 @@ def test_restart_probe_follows_new_upstream(tmp_path: Path) -> None:
                 probe_interval=2, log_path=log_path)
             shell.restart_listeners(cfg_new)
             _wait_serves(port)
+            # The balloon fires only on Running->Error (issue #5 dedup in
+            # tray._on_state). The recreated Health starts Stopped and its
+            # first Probe is merely scheduled when restart returns, so wait
+            # for Running before killing the new Upstream; otherwise the
+            # transition is Stopped->Error and no balloon is due by design.
+            health = shell._health
+            deadline = time.monotonic() + 5
+            while (time.monotonic() < deadline
+                   and health.state is not BridgeState.RUNNING):
+                time.sleep(0.02)
+            assert health.state is BridgeState.RUNNING, \
+                "new Probe never reached Running"
             # Killing only the NEW Upstream must flip Bridge State to Error
             # (balloon seam): the Probe no longer watches the old one.
             upstream_new.stop()
