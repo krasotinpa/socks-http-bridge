@@ -6,6 +6,7 @@ handler thread per connection, like a real remote host would.
 
 import socket
 import threading
+import time
 
 from loopback import LoopbackServer
 
@@ -58,11 +59,30 @@ class EofMarkerTarget(_Target):
             conn.close()
 
 
-class RecordingHttpTarget(_Target):
-    """Minimal HTTP origin: records the forwarded request, replies 200."""
+class SilentTarget(_Target):
+    """Accepts the request, then never replies: drives client read timeouts.
 
-    def __init__(self) -> None:
+    The wait is longer than the small explicit timeout the test passes, but
+    the socket is tracked so ``stop`` closes it and the handler thread exits.
+    """
+
+    def _handle(self, conn: socket.socket) -> None:
+        try:
+            conn.recv(65536)  # read the request head, then go silent
+            time.sleep(30)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+
+class RecordingHttpTarget(_Target):
+    """Minimal HTTP origin: records the forwarded request, replies 200
+    with a canned payload (default keeps the original forwarding marker)."""
+
+    def __init__(self, payload: bytes = b"forwarded-ok") -> None:
         super().__init__()
+        self._payload = payload
         self.requests: list[tuple[bytes, bytes]] = []  # (head, body)
         self._requests_lock = threading.Lock()
 
@@ -87,7 +107,7 @@ class RecordingHttpTarget(_Target):
                 body += chunk
             with self._requests_lock:
                 self.requests.append((head, body))
-            payload = b"forwarded-ok"
+            payload = self._payload
             conn.sendall(
                 b"HTTP/1.1 200 OK\r\nContent-Length: "
                 + str(len(payload)).encode("ascii")
