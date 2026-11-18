@@ -3,8 +3,9 @@
 Listens on loopback with an ephemeral port, performs the SOCKS5 handshake,
 records every CONNECT request (so tests can assert the remote-DNS wire
 bytes), and relays the Tunnel to a local target standing in for the remote
-host. Any requested hostname is mapped to that target, which is what makes
-ATYP=3 (remote DNS) observable: the name never resolves on this machine.
+host. Hostnames map to that target by default, or per-host via ``routes``;
+either way the name never resolves on this machine, which is what makes
+ATYP=3 (remote DNS) observable.
 """
 
 import socket
@@ -54,11 +55,18 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
 
 
 class FakeUpstream(LoopbackServer):
-    """Context manager: a SOCKS5 Upstream that carries Tunnels to ``target``."""
+    """Context manager: a SOCKS5 Upstream that carries Tunnels to ``target``.
 
-    def __init__(self, target: tuple[str, int]) -> None:
+    ``routes`` optionally maps a CONNECT hostname to a different target
+    address (host-based routing, e.g. ipinfo.io vs ip-api.com); any host
+    without a route goes to the default ``target``.
+    """
+
+    def __init__(self, target: tuple[str, int],
+                 routes: dict[str, tuple[str, int]] | None = None) -> None:
         super().__init__()
         self._target = target
+        self._routes = routes or {}
         self.requests: list[SocksRequest] = []
 
     def _handle(self, conn: socket.socket) -> None:
@@ -92,7 +100,12 @@ class FakeUpstream(LoopbackServer):
                     SocksRequest(methods=methods, command=cmd, atyp=atyp,
                                  host=host, port=port)
                 )
-            target = socket.create_connection(self._target, timeout=10)
+            try:
+                host_name = host.decode("ascii")
+            except UnicodeDecodeError:
+                host_name = ""
+            target_addr = self._routes.get(host_name, self._target)
+            target = socket.create_connection(target_addr, timeout=10)
             target.settimeout(None)
             with self._lock:
                 self._sockets.append(target)
