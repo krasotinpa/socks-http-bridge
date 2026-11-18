@@ -19,7 +19,7 @@ import pystray  # type: ignore[import-untyped]  # pystray ships no py.typed
 from PIL import Image, ImageDraw
 
 from socks_http_bridge import exit_ip_ui, settings
-from socks_http_bridge.config import Config
+from socks_http_bridge.config import Config, parse_address
 from socks_http_bridge.health import BridgeHealth, BridgeState
 from socks_http_bridge.tunneling import handle, log
 
@@ -51,7 +51,8 @@ class TrayShell:
     ``icon``/``health`` are injectable so tests run headless with fakes;
     production builds a real pystray.Icon and BridgeHealth. Feature modules
     reach the Bridge through ``config``, ``listener_addresses``, ``notify``
-    and ``stop_listeners``/``start_listeners`` (Apply restarts Listeners).
+    and ``restart_listeners`` (Apply saves Config, then restarts Listeners
+    atomically; Stop/Start share the same lifecycle lock).
     """
 
     def __init__(self, cfg: Config, addresses: list[tuple[str, int]],
@@ -70,8 +71,13 @@ class TrayShell:
                                    make_icon_image(BridgeState.STOPPED),
                                    "Socks HTTP Bridge", menu=self.menu))
         self._servers: list[socket.socket] = []
+        self._clients: set[socket.socket] = set()
         self._last_state = BridgeState.STOPPED
         self._lock = threading.Lock()
+        # Lifecycle lock: Stop/Start/Apply mutate _servers/_clients atomically.
+        # Separate from _lock: health callbacks take _lock, and holding one
+        # shared lock across health.start()'s Probe join would stall them ~3 s.
+        self._listener_lock = threading.Lock()
         self._health.subscribe(self._on_state)
 
     @property
@@ -81,7 +87,8 @@ class TrayShell:
     @property
     def listener_addresses(self) -> list[tuple[str, int]]:
         """The bound Listener addresses (empty while Stopped)."""
-        return [srv.getsockname() for srv in self._servers]
+        with self._listener_lock:
+            return [srv.getsockname() for srv in self._servers]
 
     def notify(self, message: str, title: str = "Socks HTTP Bridge") -> None:
         """Balloon notification (also the stub seam for feature modules)."""
@@ -121,6 +128,10 @@ class TrayShell:
 
     def start_listeners(self) -> None:
         """Bind every Listener and start the Probe; no-op while serving."""
+        with self._listener_lock:
+            self._start_listeners_locked()
+
+    def _start_listeners_locked(self) -> None:
         if self._servers:
             return
         bind_failed = False
@@ -155,10 +166,40 @@ class TrayShell:
 
     def stop_listeners(self) -> None:
         """Close every Listener and stop the Probe (the user Stop)."""
+        with self._listener_lock:
+            self._stop_listeners_locked()
+
+    def _stop_listeners_locked(self) -> None:
         for srv in self._servers:
             srv.close()
         self._servers.clear()
         self._health.stop()
+
+    def restart_listeners(self, cfg: Config) -> None:
+        """Apply (issue #7): adopt Config and restart Listeners atomically.
+
+        Active Tunnels drop (clients reconnect on their own); the Probe
+        follows a changed Upstream/interval. Worker-thread only: the restart
+        may join the old Probe for up to ~3 s. Bind failures follow the
+        Start pattern: log + listener_failed(), Bridge State Error.
+        """
+        with self._listener_lock:
+            for client in self._clients:
+                client.close()
+            self._clients.clear()
+            self._stop_listeners_locked()
+            upstream = parse_address(cfg.upstream, "upstream")
+            if (upstream != self._upstream
+                    or cfg.probe_interval != self._cfg.probe_interval):
+                self._health = BridgeHealth(
+                    upstream, probe_interval=cfg.probe_interval)
+                self._health.subscribe(self._on_state)
+            self._cfg = cfg
+            self._addresses = [parse_address(a, "listeners")
+                               for a in cfg.listeners]
+            self._upstream = upstream
+            self._log_path = os.path.expandvars(cfg.log_path)
+            self._start_listeners_locked()
 
     def _accept_loop(self, srv: socket.socket) -> None:
         while True:
@@ -166,19 +207,29 @@ class TrayShell:
                 client, addr = srv.accept()
             except OSError:
                 return  # Listener closed by Stop/Exit
-            threading.Thread(target=handle,
-                             args=(client, addr, *self._upstream),
+            with self._listener_lock:
+                self._clients.add(client)
+            threading.Thread(target=self._serve_client, args=(client, addr),
                              daemon=True).start()
+
+    def _serve_client(self, client: socket.socket,
+                      addr: tuple[str, int]) -> None:
+        try:
+            handle(client, addr, *self._upstream)
+        finally:
+            with self._listener_lock:
+                self._clients.discard(client)
 
     def toggle_bridge(self) -> None:
         """Menu Stop/Start; off the UI thread (start may join ~3 s)."""
         threading.Thread(target=self._toggle_worker, daemon=True).start()
 
     def _toggle_worker(self) -> None:
-        if self._health.state is BridgeState.STOPPED:
-            self.start_listeners()
-        else:
-            self.stop_listeners()
+        with self._listener_lock:
+            if self._health.state is BridgeState.STOPPED:
+                self._start_listeners_locked()
+            else:
+                self._stop_listeners_locked()
 
     def open_log(self) -> None:
         """Open the Config log_path in the system viewer."""
