@@ -50,9 +50,9 @@ def main() -> None:
     fh.setFormatter(fmt)
     log.addHandler(fh)
     if args.verbose or sys.stderr is not None and sys.stderr.isatty():
-        sh_ = logging.StreamHandler()
-        sh_.setFormatter(fmt)
-        log.addHandler(sh_)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(fmt)
+        log.addHandler(stream_handler)
     log.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

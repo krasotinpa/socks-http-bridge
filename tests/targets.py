@@ -6,54 +6,12 @@ handler thread per connection, like a real remote host would.
 
 import socket
 import threading
-from typing import Self
+
+from loopback import LoopbackServer
 
 
-class _Target:
-    """Base: loopback Listener on an ephemeral port with tracked sockets."""
-
-    def __init__(self) -> None:
-        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._listener.bind(("127.0.0.1", 0))
-        self._listener.listen(16)
-        self._sockets: list[socket.socket] = []
-        self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._serve, daemon=True)
-
-    @property
-    def address(self) -> tuple[str, int]:
-        return self._listener.getsockname()
-
-    def __enter__(self) -> Self:
-        self._thread.start()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.stop()
-
-    def stop(self) -> None:
-        self._listener.close()
-        with self._lock:
-            sockets = list(self._sockets)
-        for s in sockets:
-            try:
-                s.close()
-            except OSError:
-                pass
-
-    def _serve(self) -> None:
-        while True:
-            try:
-                conn, _ = self._listener.accept()
-            except OSError:
-                return
-            with self._lock:
-                self._sockets.append(conn)
-            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
-
-    def _handle(self, conn: socket.socket) -> None:
-        raise NotImplementedError
+class _Target(LoopbackServer):
+    """Base for local stand-ins: a loopback server playing the remote host."""
 
 
 class EchoTarget(_Target):

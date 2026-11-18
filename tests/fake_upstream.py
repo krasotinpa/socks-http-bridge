@@ -11,7 +11,8 @@ import socket
 import struct
 import threading
 from dataclasses import dataclass
-from typing import Self
+
+from loopback import LoopbackServer
 
 
 @dataclass(frozen=True)
@@ -52,50 +53,13 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
     return data
 
 
-class FakeUpstream:
+class FakeUpstream(LoopbackServer):
     """Context manager: a SOCKS5 Upstream that carries Tunnels to ``target``."""
 
     def __init__(self, target: tuple[str, int]) -> None:
+        super().__init__()
         self._target = target
-        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._listener.bind(("127.0.0.1", 0))
-        self._listener.listen(16)
         self.requests: list[SocksRequest] = []
-        self._sockets: list[socket.socket] = []
-        self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._serve, daemon=True)
-
-    @property
-    def address(self) -> tuple[str, int]:
-        return self._listener.getsockname()
-
-    def __enter__(self) -> Self:
-        self._thread.start()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.stop()
-
-    def stop(self) -> None:
-        self._listener.close()
-        with self._lock:
-            sockets = list(self._sockets)
-        for s in sockets:
-            try:
-                s.close()
-            except OSError:
-                pass
-
-    def _serve(self) -> None:
-        while True:
-            try:
-                conn, _ = self._listener.accept()
-            except OSError:
-                return
-            with self._lock:
-                self._sockets.append(conn)
-            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
 
     def _handle(self, conn: socket.socket) -> None:
         try:
