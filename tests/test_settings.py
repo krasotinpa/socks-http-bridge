@@ -35,6 +35,20 @@ def _isolated_config_path(tmp_path: Path,
     return path
 
 
+@pytest.fixture(autouse=True)
+def _fake_autostart(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #8 wired the real shortcut core into the form; these #7 pins
+    must not touch the real Startup folder. The fake stays in sync with the
+    Config default (autostart=True) so the prefill pin keeps its meaning;
+    dedicated wiring coverage lives in test_autostart_ui.py."""
+    monkeypatch.setattr(settings.autostart, "shortcut_exists",
+                        lambda _dir: True)
+    monkeypatch.setattr(settings.autostart, "create_shortcut",
+                        lambda *args, **kwargs: None)
+    monkeypatch.setattr(settings.autostart, "remove_shortcut",
+                        lambda _dir: None)
+
+
 def _form(**overrides: Any) -> dict[str, Any]:
     form: dict[str, Any] = {
         "listeners": ["127.0.0.1:8118"],
