@@ -5,6 +5,7 @@ AdGuard Upstream on 127.0.0.1:9090 are never touched (all sockets bind 0).
 """
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -312,9 +313,14 @@ def test_exit_stops_listeners_and_removes_icon(tmp_path: Path) -> None:
         upstream.close()
 
 
-def test_second_instance_exits_silently_and_logs(tmp_path: Path) -> None:
+def test_second_instance_exits_silently_and_logs(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The real --tray entry with only the icon loop replaced by a sleep, so
     # no tray icon ever appears; mutex guard and CLI wiring are the real ones.
+    # A private mutex name, inherited by both children, keeps the test
+    # hermetic while the live tray holds the default one (issue #28).
+    monkeypatch.setenv("BRIDGE_MUTEX_NAME",
+                       f"Local\\SocksHttpBridgeTray-test-{os.getpid()}")
     driver = (
         "import sys, time; "
         "sys.argv = ['socks-http-bridge', '--tray', '--config', sys.argv[1]]; "
@@ -343,7 +349,8 @@ def test_second_instance_exits_silently_and_logs(tmp_path: Path) -> None:
                                 text=True, timeout=30)
         assert second.returncode == 0
         assert second.stdout == "" and second.stderr == ""  # silent
-        assert "already running" in log_path.read_text(encoding="utf-8")
+        assert ("Another Bridge instance is already running; exiting"
+                in log_path.read_text(encoding="utf-8"))
         assert first.poll() is None  # the first instance is unaffected
         _serves(port)
     finally:
