@@ -1,37 +1,29 @@
-"""Install + cutover from the old bridge.py prototype (issue #9).
+"""Idempotent installer for the tray Bridge (issue #9).
 
 Run from the repo root:  uv run python scripts/install.py [--dry-run]
 
 Steps, in this order:
-  1. uv sync -- broken dependencies must never kill a working bridge,
-     so syncing happens strictly BEFORE the old bridge is stopped.
-  2. Stop the old bridge: enumerate python/pythonw processes through
-     PowerShell CIM and match the command line STRICTLY against
-     tools\\socks-http-bridge\\bridge.py (separator-tolerant, case-
-     insensitive, whole filename). Unrelated python processes are never
-     touched. Stop is graceful first (taskkill without /F posts WM_CLOSE;
-     a windowless pythonw usually refuses), then force (/F) if the
-     process is still alive. If force fails, install aborts before
-     touching the Startup shortcut or launching the tray.
-  3. Switch the Startup shortcut: remove only .lnk files whose target or
-     arguments point at the old bridge.py (identified by content, not by
-     name), then create SocksHttpBridge.lnk through the autostart core
-     (pythonw.exe -m socks_http_bridge --tray). Already correct -> skip.
-  4. Launch the tray detached (DETACHED_PROCESS | CREATE_NO_WINDOW).
+  1. uv sync -- dependencies first, so a broken sync aborts before the
+     Startup shortcut is touched or the tray is launched.
+  2. Create the Startup shortcut SocksHttpBridge.lnk through the
+     autostart core (pythonw.exe -m socks_http_bridge --tray).
+     Already correct -> skip. Other .lnk files are never touched.
+  3. Launch the tray detached (DETACHED_PROCESS | CREATE_NO_WINDOW).
      A tray already running is left alone: the single-instance mutex
      would exit a second launch anyway.
-  5. Verify: TCP-connect the first configured Listener (default
+  4. Verify: TCP-connect the first configured Listener (default
      127.0.0.1:8118) for up to ~10 s; on failure print the log path.
 
-uv discovery: UV_BIN env var, then shutil.which("uv"), then the known
-install-manager path on this laptop (KNOWN_UV below). uv sync gets
---python KNOWN_PYTHON when that shim exists (uv may not find the
-install-manager Python on its own, see AGENTS.md).
+Tool discovery: uv via UV_BIN env var, then shutil.which("uv"), then
+the install-manager layout under %LOCALAPPDATA%\\Python (newest
+pythoncore-* wins). uv sync gets --python KNOWN_PYTHON when that shim
+exists (uv may not find the install-manager Python on its own, see
+AGENTS.md).
 
-Idempotent: no old process -> skip stop; shortcut already correct ->
-skip; tray already running -> skip launch; Listener already answering
-with the tray up -> "Already installed" report. --dry-run prints the
-plan using read-only discovery only (no sync, stop, writes or launch).
+Idempotent: shortcut already correct -> skip; tray already running ->
+skip launch; Listener already answering with the tray up -> "Already
+installed" report. --dry-run prints the plan using read-only discovery
+only (no sync, writes or launch). No running process is ever stopped.
 
 Stdlib + the autostart core only. Reuses settings._startup_dir() and
 settings.TRAY_ARGUMENTS (importing settings has no side effects).
@@ -40,7 +32,6 @@ settings.TRAY_ARGUMENTS (importing settings has no side effects).
 import argparse
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -53,13 +44,11 @@ from socks_http_bridge import autostart
 from socks_http_bridge.config import Config, ConfigError, connect_target, parse_address
 from socks_http_bridge.settings import TRAY_ARGUMENTS, _startup_dir
 
-KNOWN_UV = Path(
-    "C:/Users/krasotin/AppData/Local/Python/pythoncore-3.15-64/Scripts/uv.exe")
-KNOWN_PYTHON = Path("C:/Users/krasotin/AppData/Local/Python/bin/python.exe")
-
-# Whole filename: bridge.py.bak / bridge.pyw must NOT match.
-OLD_BRIDGE = re.compile(
-    r"tools[\\/]socks-http-bridge[\\/]bridge\.py(?![\w.])", re.IGNORECASE)
+# Per-user install-manager layout (%LOCALAPPDATA%\Python\...); the default
+# `python` may be a store alias without pip, hence the explicit shim.
+LOCAL_APP_DATA = Path(
+    os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+KNOWN_PYTHON = LOCAL_APP_DATA / "Python" / "bin" / "python.exe"
 
 PS_ENUMERATE = (
     "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
@@ -79,16 +68,28 @@ class Proc(NamedTuple):
     commandline: str
 
 
+def _pythoncore_version(uv: Path) -> tuple[int, ...]:
+    """(3, 15) for .../pythoncore-3.15-64/Scripts/uv.exe; (0,) if odd."""
+    name = uv.parents[1].name.removeprefix("pythoncore-").split("-")[0]
+    try:
+        return tuple(int(part) for part in name.split("."))
+    except ValueError:
+        return (0,)
+
+
 def find_uv() -> str:
-    """UV_BIN env var -> PATH -> the known install-manager fallback."""
+    """UV_BIN env var -> PATH -> install-manager uv under LOCAL_APP_DATA."""
     env = os.environ.get("UV_BIN")
     if env:
         return env
     found = shutil.which("uv")
     if found:
         return found
-    if KNOWN_UV.is_file():
-        return str(KNOWN_UV)
+    matches = sorted(
+        LOCAL_APP_DATA.glob("Python/pythoncore-*/Scripts/uv.exe"),
+        key=_pythoncore_version, reverse=True)
+    if matches:
+        return str(matches[0])
     raise InstallError("uv not found; set UV_BIN or add uv to PATH")
 
 
@@ -115,85 +116,20 @@ def enumerate_processes() -> list[Proc]:
             for p in items]
 
 
-def is_old_bridge(commandline: str) -> bool:
-    return OLD_BRIDGE.search(commandline) is not None
-
-
 def is_tray(commandline: str) -> bool:
     return "-m socks_http_bridge" in commandline and "--tray" in commandline
 
 
-def _alive(pid: int) -> bool:
-    return any(p.pid == pid for p in enumerate_processes())
-
-
-def _wait_gone(pid: int, timeout: float) -> bool:
-    deadline = monotonic() + timeout
-    while _alive(pid):
-        if monotonic() >= deadline:
-            return False
-        sleep(0.5)
-    return True
-
-
-def stop_old_bridge(targets: list[Proc]) -> None:
-    """Graceful taskkill, then /F fallback; abort if the process lives."""
-    if not targets:
-        print("No old bridge process found; nothing to stop.")
-        return
-    for proc in targets:
-        print(f"Stopping old bridge PID {proc.pid}: {proc.commandline}")
-        # Graceful first: WM_CLOSE. A windowless pythonw usually refuses
-        # (nonzero exit); that is expected, not an error.
-        run(["taskkill", "/PID", str(proc.pid)])
-        if _wait_gone(proc.pid, 5.0):
-            continue
-        result = run(["taskkill", "/F", "/PID", str(proc.pid)])
-        if result.returncode != 0:
-            raise InstallError(
-                f"cannot stop old bridge PID {proc.pid}: "
-                f"{result.stderr.strip()}")
-        if not _wait_gone(proc.pid, 3.0):
-            raise InstallError(
-                f"old bridge PID {proc.pid} still alive after taskkill /F")
-        print(f"Stopped old bridge PID {proc.pid} (forced).")
-
-
-def read_lnk(lnk: Path) -> tuple[str, str]:
-    """Read a shortcut's target and arguments via WScript.Shell."""
-    quoted = str(lnk).replace("'", "''")
-    result = run([
-        "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-        ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-         f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{quoted}'); "
-         "Write-Output $s.TargetPath; Write-Output $s.Arguments")])
-    lines = result.stdout.splitlines()
-    if result.returncode != 0 or len(lines) < 2:
-        raise InstallError(f"cannot read shortcut {lnk}: {result.stderr.strip()}")
-    return lines[0], lines[1]
-
-
-def shortcut_actions(startup_dir: Path,
-                     pythonw: Path) -> tuple[list[Path], bool]:
-    """Read-only plan: (old .lnk files to remove, app shortcut needs work).
-    Old shortcuts are identified by target/arguments, never by name."""
-    remove = []
-    for lnk in sorted(startup_dir.glob("*.lnk")):
-        target, arguments = read_lnk(lnk)
-        if is_old_bridge(target) or is_old_bridge(arguments):
-            remove.append(lnk)
+def shortcut_needs_recreate(startup_dir: Path, pythonw: Path) -> bool:
+    """Read-only plan: does the app shortcut need (re)creating?"""
     info = autostart.inspect_shortcut(startup_dir)
     correct = (info is not None and Path(info.target) == pythonw
                and info.arguments == TRAY_ARGUMENTS)
-    return remove, not correct
+    return not correct
 
 
 def switch_startup_shortcut(startup_dir: Path, pythonw: Path) -> None:
-    remove, needs_create = shortcut_actions(startup_dir, pythonw)
-    for lnk in remove:
-        print(f"Removing old Startup shortcut: {lnk.name}")
-        lnk.unlink()
-    if needs_create:
+    if shortcut_needs_recreate(startup_dir, pythonw):
         lnk = autostart.create_shortcut(
             startup_dir, pythonw, arguments=TRAY_ARGUMENTS)
         print(f"Created Startup shortcut: {lnk}")
@@ -231,19 +167,12 @@ def _load_config() -> Config:
         return Config()
 
 
-def _print_plan(sync_cmd: list[str], old: list[Proc], tray: list[Proc],
+def _print_plan(sync_cmd: list[str], tray: list[Proc],
                 startup: Path, pythonw: Path,
                 address: tuple[str, int]) -> None:
     print("dry-run: planning only, no changes will be made")
     print(f"  would run: {' '.join(sync_cmd)}")
-    for proc in old:
-        print(f"  would stop old bridge PID {proc.pid}: {proc.commandline}")
-    if not old:
-        print("  no old bridge process found; nothing to stop")
-    remove, needs_create = shortcut_actions(startup, pythonw)
-    for lnk in remove:
-        print(f"  would remove old Startup shortcut: {lnk.name}")
-    if needs_create:
+    if shortcut_needs_recreate(startup, pythonw):
         print(f"  would create Startup shortcut {autostart.SHORTCUT_NAME} "
               f"-> {pythonw} {TRAY_ARGUMENTS}")
     else:
@@ -266,40 +195,36 @@ def install(repo_root: Path, *, startup_dir: Path | None = None,
     if KNOWN_PYTHON.is_file():
         sync_cmd += ["--python", str(KNOWN_PYTHON)]
     procs = enumerate_processes()
-    old = [p for p in procs if is_old_bridge(p.commandline)]
     tray = [p for p in procs if is_tray(p.commandline)]
     cfg = _load_config()
     # Self-connect target: a wildcard Listen must be dialed via loopback
     # (Windows rejects connect() to 0.0.0.0/:: with WinError 10049).
     address = connect_target(parse_address(cfg.listeners[0], "listeners"))
     if dry_run:
-        _print_plan(sync_cmd, old, tray, startup, pythonw, address)
+        _print_plan(sync_cmd, tray, startup, pythonw, address)
         return 0
 
-    # 1. Sync BEFORE stopping anything: broken deps must not kill the
-    #    working bridge (pinned by test_sync_runs_before_stop_and_the_rest).
+    # 1. Sync first: a broken sync aborts before the shortcut is touched
+    #    or the tray is launched (pinned by test_sync_runs_before_the_rest).
     print("Syncing dependencies (uv sync)...")
     result = run(sync_cmd, cwd=repo_root)
     if result.returncode != 0:
         raise InstallError(
             f"uv sync failed (exit {result.returncode}): "
             f"{result.stderr.strip() or result.stdout.strip()}")
-    # 2. Stop the old bridge (strict matching inside stop_old_bridge's
-    #    caller-side filter; graceful then force).
-    stop_old_bridge(old)
-    # 3. Switch the Startup shortcut.
+    # 2. Create the Startup shortcut if it is missing or stale.
     switch_startup_shortcut(startup, pythonw)
-    # 4. Launch the tray unless it is already up (mutex guards anyway).
+    # 3. Launch the tray unless it is already up (mutex guards anyway).
     if tray:
         print(f"Tray already running (PID {tray[0].pid}); skipping launch "
               "(single-instance mutex).")
     else:
         print("Starting the tray Bridge...")
         spawn_tray(pythonw, repo_root)
-    # 5. Verify the Listener answers.
+    # 4. Verify the Listener answers.
     print(f"Verifying Listener {address[0]}:{address[1]} (up to 10 s)...")
     if wait_for_listener(address):
-        if tray and not old:
+        if tray:
             print("Already installed: the tray Bridge is running and the "
                   "Listener responds.")
         else:
@@ -308,14 +233,14 @@ def install(repo_root: Path, *, startup_dir: Path | None = None,
     print(f"FAILED: Listener {address[0]}:{address[1]} did not respond "
           f"within 10 s. Check the log: {os.path.expandvars(cfg.log_path)}")
     print("If the tray icon is grey/red, use Stop then Start in the tray "
-          "menu (the old bridge may have held the port).")
+          "menu (another process may hold the port).")
     return 1
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Install the tray Bridge and cut over from the old "
-                    "tools/socks-http-bridge/bridge.py (issue #9).")
+        description="Install the tray Bridge: uv sync, Startup shortcut, "
+                    "launch, verify (issue #9).")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the planned actions without side effects")
     args = ap.parse_args()
