@@ -274,6 +274,18 @@ def test_menu_wires_status_stubs_and_actions(
     assert done.wait(3), "Settings window never reached mainloop"
     assert seen["title"] == "Socks HTTP Bridge — Settings"
     assert seen["thread"] is not threading.current_thread()
+    # About (#35): the menu dispatches the popup on its own worker thread.
+    about_done = threading.Event()
+    about_threads: list[threading.Thread] = []
+
+    def about_popup(shell: object) -> None:
+        about_threads.append(threading.current_thread())
+        about_done.set()
+
+    monkeypatch.setattr(tray.about_ui, "show_popup", about_popup)
+    items["About…"](icon)
+    assert about_done.wait(3), "About popup never opened"
+    assert about_threads[0] is not threading.current_thread()
 
 
 def test_open_log_opens_config_log_path(tmp_path: Path,

@@ -4,7 +4,7 @@ One pythonw process, icon coloured by Bridge State, menu with the status
 line, Stop/Start, Open log and Exit. Observes Bridge State only through the
 Health interface (``state`` + ``subscribe``); no UI code lives in Health or
 Tunneling. Feature UIs are separate modules pre-wired into the menu:
-exit_ip_ui (issue #6) and settings (issue #7).
+exit_ip_ui (issue #6), settings (issue #7) and about_ui (issue #35).
 
 Entry: ``pythonw.exe -m socks_http_bridge --tray`` (see __main__.py).
 """
@@ -18,7 +18,7 @@ from ctypes import wintypes
 import pystray  # type: ignore[import-untyped]  # pystray ships no py.typed
 from PIL import Image, ImageDraw
 
-from socks_http_bridge import exit_ip_ui, settings
+from socks_http_bridge import about_ui, exit_ip_ui, settings
 from socks_http_bridge.config import Config, parse_address
 from socks_http_bridge.health import BridgeHealth, BridgeState
 from socks_http_bridge.tunneling import handle, log
@@ -122,6 +122,8 @@ class TrayShell:
                              lambda icon, item: exit_ip_ui.run_test(self)),
             pystray.MenuItem("Settings",
                              lambda icon, item: settings.open_settings(self)),
+            pystray.MenuItem("About…",
+                             lambda icon, item: about_ui.show_about(self)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Exit", self.exit),
         )
