@@ -270,7 +270,10 @@ def acquire_single_instance() -> bool:
     kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL,
                                       wintypes.LPCWSTR]
     kernel32.CreateMutexW.restype = wintypes.HANDLE
-    handle = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    # Test seam (issue #28): an env override gives tests a private mutex
+    # name; without it production keeps the default MUTEX_NAME.
+    handle = kernel32.CreateMutexW(
+        None, False, os.environ.get("BRIDGE_MUTEX_NAME", MUTEX_NAME))
     if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
         if handle:
             kernel32.CloseHandle(handle)
