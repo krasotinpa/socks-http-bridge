@@ -254,12 +254,17 @@ def test_spawn_tray_command_and_flags(
         captured.update(kwargs)
 
     monkeypatch.setattr(install.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "staging-src"))
     pythonw = tmp_path / "pythonw.exe"
     install.spawn_tray(pythonw, tmp_path)
     assert captured["cmd"] == [str(pythonw), "-m", "socks_http_bridge", "--tray"]
     assert captured["cwd"] == str(tmp_path)
     assert captured["creationflags"] == (
         subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW)
+    # The hosted bootstrapper delegates with PYTHONPATH at its temp staging
+    # src (#49); the detached tray must not inherit a deleted dir.
+    assert isinstance(captured["env"], dict)
+    assert "PYTHONPATH" not in captured["env"]
 
 
 def test_wait_for_listener_on_ephemeral_port() -> None:
