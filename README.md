@@ -20,9 +20,10 @@ any VPN that provides a local SOCKS5 proxy.
 
 - One `pythonw.exe` process, no console; tray icon shows state:
   green — running, grey — stopped, red — error (Upstream unreachable).
-- Tray menu: status (`listen → socks`), Stop/Start, Open log, Exit IP Test,
-  Settings (multiple Listen addresses, SOCKS Upstream, Windows Autostart,
-  Apply on the fly), About… (name, version, license, repository link), Exit.
+- Tray menu: the `listen → socks` address line, Stop/Start, Open log,
+  Exit IP Test, Settings (multiple Listeners, SOCKS Upstream, Windows
+  Autostart, Apply on the fly), About… (name, version, license, repository
+  link), Exit.
 - Config: `%LOCALAPPDATA%\socks-http-bridge\config.json`.
 - Autostart via a Startup shortcut managed from Settings; single-instance mutex.
 - Core: CONNECT tunnels + plain-HTTP forwarding, SOCKS5 with remote DNS (ATYP=3),
@@ -93,5 +94,5 @@ MIT — see [LICENSE](LICENSE).
 
 ## Status
 
-In active development. Released versions and source artifacts (sdist + wheel)
-live in [GitHub Releases](https://github.com/krasotinpa/socks-http-bridge/releases).
+In active development. See [GitHub Releases](https://github.com/krasotinpa/socks-http-bridge/releases)
+for released versions and source artifacts (sdist + wheel).
