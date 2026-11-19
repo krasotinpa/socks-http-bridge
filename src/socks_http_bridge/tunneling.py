@@ -1,6 +1,6 @@
 """Tunneling core: HTTP client connections carried through the SOCKS5 Upstream.
 
-Ported from reference/bridge.py with behaviour preserved: CONNECT Tunnels
+Ported from the proven prototype (git history) with behaviour preserved: CONNECT Tunnels
 plus plain-HTTP forwarding, SOCKS5 with remote DNS (ATYP=3), TCP_NODELAY,
 half-close propagation, and no idle timeout on established Tunnels
 (long-lived SSE/WebSocket streams are first-class). Stdlib only.

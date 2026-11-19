@@ -59,9 +59,7 @@ conversation has one reader, the repository has many.
   ADRs in `docs/adr/` that touch your area. Name things with the glossary's terms; when
   your change contradicts an ADR, say so rather than silently overriding it.
   See `docs/agents/domain.md`.
-- **Reference core**: `reference/bridge.py` is the proven prototype the application core
-  is built from (CONNECT tunnels + plain-HTTP forwarding, SOCKS5 with remote DNS, no idle
-  timeout on tunnels). Behaviour changes to the core need a test that pins the old
+- **Tunneling core**: behaviour changes to the core need a test that pins the old
   behaviour first.
 
 ## Environment

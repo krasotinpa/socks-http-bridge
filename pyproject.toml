@@ -29,10 +29,5 @@ packages = ["src/socks_http_bridge"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-[tool.ruff.lint.per-file-ignores]
-# The reference prototype is kept verbatim for provenance; its catch-all
-# exception handler is deliberate (any failure yields 502 to the client).
-"reference/bridge.py" = ["BLE001"]
-
 [tool.mypy]
 files = ["src"]
