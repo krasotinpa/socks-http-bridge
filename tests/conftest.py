@@ -1,7 +1,7 @@
 """Fixtures that run the Tunneling core on loopback with ephemeral ports.
 
-The live Bridge on 127.0.0.1:8118 and the AdGuard Upstream on 127.0.0.1:9090
-are never touched: every socket here binds port 0.
+The live Bridge and the live Upstream are never touched: every socket here
+binds port 0.
 """
 
 import socket

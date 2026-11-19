@@ -4,8 +4,8 @@ Headless: every seam is fake -- the subprocess runner, process
 enumeration, the shortcut switch, the tray Popen and the socket probe.
 Shortcut behaviour is additionally exercised against real .lnk files in
 pytest tmp_path directories (same convention as test_autostart.py); the
-real Startup folder, the live Bridge on 8118, the Upstream on 9090 and
-the user's Config are never touched.
+real Startup folder, the live Bridge, the live Upstream and the user's
+Config are never touched.
 """
 
 import importlib.util

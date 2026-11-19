@@ -1,7 +1,6 @@
 """Integration tests at the Exit IP Test seam: fetch/parse through a real
 Bridge Listener + fake SOCKS5 Upstream + canned targets, all on ephemeral
-ports. The live Bridge (127.0.0.1:8118) and AdGuard (127.0.0.1:9090) are
-never touched.
+ports. The live Bridge and the live Upstream are never touched.
 
 test_urls are http:// through the Tunnel; the https geo URL is switched to
 http:// on the same ipinfo.io host (the fake Upstream routes by CONNECT

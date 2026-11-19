@@ -1,9 +1,8 @@
 """Smoke tests for the headless CLI: ``python -m socks_http_bridge``.
 
-Runs the real entry point as a subprocess with the reference CLI flags
+Runs the real entry point as a subprocess with the CLI flags
 (--listen/--socks/--log) on ephemeral ports through a fake Upstream; the
-live Bridge on 127.0.0.1:8118 and the AdGuard Upstream on 127.0.0.1:9090
-are never touched.
+live Bridge and the live Upstream are never touched.
 """
 
 import socket

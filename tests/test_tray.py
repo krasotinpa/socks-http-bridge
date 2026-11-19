@@ -1,7 +1,7 @@
 """Tray Shell tests: pure state mapping, balloon dedup at the subscribe
 handler seam, Stop/Start wiring on real sockets, menu stubs, single-instance
-mutex. No real icon loop runs here; the live Bridge on 127.0.0.1:8118 and the
-AdGuard Upstream on 127.0.0.1:9090 are never touched (all sockets bind 0).
+mutex. No real icon loop runs here; the live Bridge and the live Upstream
+are never touched (all sockets bind 0).
 """
 
 import json

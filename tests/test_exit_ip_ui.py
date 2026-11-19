@@ -1,8 +1,8 @@
 """Exit IP Test UI tests: pure result/error formatting, worker orchestration
 with a fake fetch and fake popup at the module seams, and Tk construction
-without a real mainloop. No network, no visible windows; the live Bridge on
-127.0.0.1:8118 and the AdGuard Upstream on 127.0.0.1:9090 are never touched
-(the fake Listeners use port 18118; nothing binds or dials it).
+without a real mainloop. No network, no visible windows; the live Bridge
+and the live Upstream are never touched (the fake Listeners use port 18118;
+nothing binds or dials it).
 """
 
 import threading
