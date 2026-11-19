@@ -137,3 +137,24 @@ def test_dry_run_missing_override_still_plans(tmp_path: Path) -> None:
     assert "dry-run" in out
     assert "channel stable" in out
     assert not (tmp_path / "app").exists()
+
+
+def test_iex_form_survives_dead_bridge_proxy_env(tmp_path: Path) -> None:
+    # #59: the installer's own client hint sets HTTP(S)_PROXY at the
+    # Bridge itself; with the tray stopped those vars dial a dead port.
+    # The bootstrapper must strip them (and a foreign VIRTUAL_ENV) for
+    # its own process. The discriminating sync pin lives at the run()
+    # seam in test_install.py and in the CI smoke job (real sync).
+    tarball = make_source_tarball(tmp_path / "source.tar.gz")
+    dead = "http://127.0.0.1:9"  # nothing listens: connection refused
+    env = ps_env(tmp_path, BRIDGE_SOURCE_TARBALL=str(tarball), BRIDGE_DRYRUN="1",
+                 HTTP_PROXY=dead, HTTPS_PROXY=dead, ALL_PROXY=dead,
+                 VIRTUAL_ENV=str(tmp_path / "foreign-venv"))
+    result = run_ps([], env,
+                    command=f"Invoke-Expression (Get-Content -Raw '{SCRIPT}')")
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout.lower()
+    assert "dry-run" in out
+    assert "would extract" in out  # delegated install.py plan
+    assert not (tmp_path / "app").exists()
+    assert "virtual_env" not in (result.stdout + result.stderr).lower()
