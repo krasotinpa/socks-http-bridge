@@ -2,8 +2,7 @@
 
 Runs the real entry point as a subprocess on ephemeral ports; one Listener
 port is deliberately taken by a socket this file holds. The real Config,
-the live Bridge on 127.0.0.1:8118 and the AdGuard Upstream on 127.0.0.1:9090
-are never touched.
+the live Bridge and the live Upstream are never touched.
 """
 
 import json

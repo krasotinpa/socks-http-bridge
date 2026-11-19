@@ -1,8 +1,8 @@
 """Settings tests: form validation, LAN-exposure warning, Apply orchestration,
 Listener lifecycle lock and the tkinter form (withdrawn root, no mainloop).
 
-The live Bridge on 127.0.0.1:8118 and the AdGuard Upstream on 127.0.0.1:9090
-are never touched: every socket binds port 0, Config writes go to tmp_path.
+The live Bridge and the live Upstream are never touched: every socket binds
+port 0, Config writes go to tmp_path.
 """
 
 import json

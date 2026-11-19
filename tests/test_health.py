@@ -1,8 +1,8 @@
 """Seam tests for Health: the Probe and Bridge State on real local sockets.
 
 Every socket binds port 0 on loopback (or rebinds a port this file closed);
-the live Bridge on 127.0.0.1:8118 and the AdGuard Upstream on 127.0.0.1:9090
-are never touched. Probe intervals are tiny so the suite stays fast.
+the live Bridge and the live Upstream are never touched. Probe intervals
+are tiny so the suite stays fast.
 """
 
 import socket

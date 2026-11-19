@@ -1,7 +1,7 @@
 """About UI tests: popup content at the Tk seam (real construction, no
 mainloop, no visible windows), the repository link action, and worker
-orchestration with a fake popup. No network; the live Bridge on
-127.0.0.1:8118 and the Upstream on 127.0.0.1:9090 are never touched.
+orchestration with a fake popup. No network; the live Bridge and the live
+Upstream are never touched.
 """
 
 import importlib.metadata

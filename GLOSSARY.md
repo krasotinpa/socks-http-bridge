@@ -1,7 +1,7 @@
 # Socks HTTP Bridge
 
 A Windows tray application that lets HTTP-only clients (Codex CLI, ChatGPT desktop)
-use a SOCKS5-only VPN exit (AdGuard VPN) by bridging local HTTP proxy listeners to
+use a SOCKS5-only VPN exit (e.g. AdGuard VPN) by bridging local HTTP proxy listeners to
 one SOCKS5 upstream.
 
 ## Language
@@ -17,7 +17,8 @@ or more Listeners, all sharing one Upstream.
 _Avoid_: bind, endpoint, вход
 
 **Upstream**:
-The single SOCKS5 proxy (AdGuard VPN) that every Tunnel is carried through.
+The single SOCKS5 proxy — a VPN's local SOCKS5 listener, e.g. AdGuard VPN —
+that every Tunnel is carried through.
 _Avoid_: SOCKS server, target, выход
 
 **Tunnel**:
