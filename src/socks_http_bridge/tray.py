@@ -10,13 +10,15 @@ Entry: ``pythonw.exe -m socks_http_bridge --tray`` (see __main__.py).
 """
 
 import ctypes
+import io
 import os
 import socket
 import threading
 from ctypes import wintypes
+from importlib import resources
 
 import pystray  # type: ignore[import-untyped]  # pystray ships no py.typed
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from socks_http_bridge import about_ui, exit_ip_ui, settings
 from socks_http_bridge.config import Config, parse_address
@@ -31,11 +33,15 @@ STATE_COLORS: dict[BridgeState, tuple[int, int, int]] = {
 
 
 def make_icon_image(state: BridgeState) -> Image.Image:
-    """A coloured circle on transparent background; no external assets."""
-    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    ImageDraw.Draw(image).ellipse((8, 8, 56, 56),
-                                  fill=(*STATE_COLORS[state], 255))
-    return image
+    """The bundled Bridge glyph PNG for this Bridge State (issue #45).
+
+    Static assets in ``assets/`` (regenerate: scripts/make_icons.py);
+    the tray never draws at runtime.
+    """
+    name = f"icon-{state.name.lower()}.png"
+    data = (resources.files("socks_http_bridge")
+            .joinpath("assets", name).read_bytes())
+    return Image.open(io.BytesIO(data)).convert("RGBA")
 
 
 def status_line(listeners: list[str], upstream: str) -> str:
