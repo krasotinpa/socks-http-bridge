@@ -30,9 +30,9 @@ conversation has one reader, the repository has many.
   ```
 
   The project is uv-managed: `uv sync` creates `.venv` and installs the runtime and
-  dev dependencies; `uv run` executes commands inside that environment. On this
-  machine pass `--python C:\Users\krasotin\AppData\Local\Python\bin\python.exe` to
-  `uv sync`, since uv may not find the install-manager Python on its own.
+  dev dependencies; `uv run` executes commands inside that environment. If uv
+  cannot find the install-manager Python on its own, pass
+  `--python %LOCALAPPDATA%\Python\bin\python.exe` to `uv sync`.
 
 ## Scope of a change
 
@@ -68,8 +68,8 @@ conversation has one reader, the repository has many.
 
 - Development machine: Windows 11, git-bash shell with MSYS path conversion disabled —
   pass `C:/...` forward-slash paths to native tools (python, git, taskkill), never `/c/...`.
-- Python: `C:\Users\krasotin\AppData\Local\Python\bin\python.exe` (3.15, install-manager
-  shims are stable); `pythonw.exe` alongside it runs the tray app without a console.
+- Python: install-manager shims at `%LOCALAPPDATA%\Python\bin` (3.15);
+  `pythonw.exe` alongside it runs the tray app without a console.
 - Runtime dependencies: `pystray`, `Pillow` (tray icon), stdlib `tkinter` (settings window).
   The bridge core itself stays stdlib-only.
 - Defender silently deletes downloaded Go proxy binaries — keep this project pure Python;

@@ -38,26 +38,22 @@ From the repo root:
 uv run python scripts/install.py
 ```
 
-Add `--python C:\Users\krasotin\AppData\Local\Python\bin\python.exe` to
+Add `--python %LOCALAPPDATA%\Python\bin\python.exe` to
 `uv run` if uv cannot find the install-manager Python on its own. Use
 `--dry-run` first to print the planned actions without side effects.
 
 What the script does, in order:
 
-1. `uv sync` — dependencies first, so a broken sync never kills a working
-   bridge. uv is found via `UV_BIN`, then `PATH`, then the known
-   install-manager path.
-2. Stops the old `tools\socks-http-bridge\bridge.py` process: PowerShell CIM
-   enumeration, strict command-line matching (separator-tolerant), graceful
-   `taskkill` then `/F` fallback. Unrelated python processes are never touched.
-3. Switches the Startup shortcut: removes only `.lnk` files whose
-   target/arguments point at the old `bridge.py` (matched by content, not
-   name), then creates `SocksHttpBridge.lnk` targeting
-   `.venv\Scripts\pythonw.exe -m socks_http_bridge --tray`.
-4. Starts the tray app detached (no console). Re-runs are safe: an
+1. `uv sync` — dependencies first, so a broken sync aborts before anything
+   else is touched. uv is found via `UV_BIN`, then `PATH`, then the
+   install-manager layout under `%LOCALAPPDATA%\Python`.
+2. Creates the Startup shortcut `SocksHttpBridge.lnk` targeting
+   `.venv\Scripts\pythonw.exe -m socks_http_bridge --tray`. Other `.lnk`
+   files are never touched.
+3. Starts the tray app detached (no console). Re-runs are safe: an
    already-correct shortcut and an already-running tray are skipped
-   (single-instance mutex).
-5. Verifies the Listener `127.0.0.1:8118` answers within ~10 s; on failure
+   (single-instance mutex). No running process is ever stopped.
+4. Verifies the Listener `127.0.0.1:8118` answers within ~10 s; on failure
    it prints the log path (`%LOCALAPPDATA%\socks-http-bridge\bridge.log`).
 
 Point HTTP-only clients at the Bridge (no `ALL_PROXY`):
