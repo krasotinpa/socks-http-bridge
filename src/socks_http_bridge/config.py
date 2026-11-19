@@ -37,6 +37,16 @@ def parse_address(value: object, name: str) -> tuple[str, int]:
     return host, port
 
 
+def connect_target(address: tuple[str, int]) -> tuple[str, int]:
+    """Self-connect destination for a bound Listener address.
+
+    Windows rejects connect() to a wildcard bind address (WinError 10049),
+    so map wildcards to loopback; every other host stays as bound.
+    """
+    host, port = address
+    return {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host), port
+
+
 @dataclass
 class Config:
     listeners: list[str] = field(default_factory=lambda: ["127.0.0.1:8118"])

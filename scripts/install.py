@@ -50,7 +50,7 @@ from time import monotonic, sleep
 from typing import NamedTuple
 
 from socks_http_bridge import autostart
-from socks_http_bridge.config import Config, ConfigError, parse_address
+from socks_http_bridge.config import Config, ConfigError, connect_target, parse_address
 from socks_http_bridge.settings import TRAY_ARGUMENTS, _startup_dir
 
 KNOWN_UV = Path(
@@ -269,7 +269,9 @@ def install(repo_root: Path, *, startup_dir: Path | None = None,
     old = [p for p in procs if is_old_bridge(p.commandline)]
     tray = [p for p in procs if is_tray(p.commandline)]
     cfg = _load_config()
-    address = parse_address(cfg.listeners[0], "listeners")
+    # Self-connect target: a wildcard Listen must be dialed via loopback
+    # (Windows rejects connect() to 0.0.0.0/:: with WinError 10049).
+    address = connect_target(parse_address(cfg.listeners[0], "listeners"))
     if dry_run:
         _print_plan(sync_cmd, old, tray, startup, pythonw, address)
         return 0
