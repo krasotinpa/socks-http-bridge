@@ -82,6 +82,12 @@ jobs:
       - name: Clean install (iex form, source override)
         if: steps.gate.outputs.run == 'true'
         shell: powershell
+        env: &dead-proxy-env
+          # #59: the client hint points HTTP(S)_PROXY at the Bridge itself,
+          # stopped during install/update sync; dead port 9 refuses connections.
+          HTTP_PROXY: "http://127.0.0.1:9"
+          HTTPS_PROXY: "http://127.0.0.1:9"
+          ALL_PROXY: "http://127.0.0.1:9"
         run: |
           $ErrorActionPreference = 'Continue'
           $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Invoke-Expression (Get-Content -Raw .\scripts\install.ps1)" 2>&1
@@ -114,6 +120,7 @@ jobs:
       - name: Re-run as update (new target, -File form)
         if: steps.gate.outputs.run == 'true'
         shell: powershell
+        env: *dead-proxy-env
         run: |
           $ErrorActionPreference = 'Continue'
           $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\install.ps1 -SourceTarball $env:BRIDGE_SOURCE_TARBALL -Version smoke-2 2>&1
@@ -137,6 +144,7 @@ jobs:
       - name: Up-to-date re-run is a no-op
         if: steps.gate.outputs.run == 'true'
         shell: powershell
+        env: *dead-proxy-env
         run: |
           $ErrorActionPreference = 'Continue'
           $findTray = {

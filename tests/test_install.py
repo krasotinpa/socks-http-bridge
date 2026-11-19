@@ -266,6 +266,38 @@ def test_spawn_tray_command_and_flags(
     assert isinstance(captured["env"], dict)
     assert "PYTHONPATH" not in captured["env"]
 
+def test_run_strips_proxy_and_virtual_env(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """#59: the Bridge cannot be its own bootstrap proxy -- the user's
+    HTTP(S)_PROXY may point at the (stopped) Bridge itself, so installer
+    subprocesses run proxy-free; VIRTUAL_ENV from a dev shell mismatches
+    the app venv and is dropped too."""
+    captured: dict[str, object] = {}
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: object) -> (
+            subprocess.CompletedProcess[str]):
+        captured["cmd"] = cmd
+        captured.update(kwargs)
+        return _cp(cmd)
+
+    monkeypatch.setattr(install.subprocess, "run", fake_subprocess_run)
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                 "http_proxy", "https_proxy", "all_proxy", "Https_Proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:8118")
+    for name in ("VIRTUAL_ENV", "virtual_env"):
+        monkeypatch.setenv(name, "C:/dev/socks-http-bridge/.venv")
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1,::1")
+    monkeypatch.setenv("UV_BIN", "C:/uv/uv.exe")
+    install.run(["uv", "sync"])
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert not ({"http_proxy", "https_proxy", "all_proxy", "virtual_env"}
+                & {k.lower() for k in env})
+    # Unrelated vars survive untouched.
+    assert env["NO_PROXY"] == "localhost,127.0.0.1,::1"
+    assert env["UV_BIN"] == "C:/uv/uv.exe"
+
+
 
 def test_wait_for_listener_on_ephemeral_port() -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

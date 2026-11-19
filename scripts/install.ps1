@@ -62,6 +62,15 @@ try {
     if ($env:OS -ne 'Windows_NT') { Fail 'the Bridge is Windows-only.' }
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+    # The Bridge cannot be its own bootstrap proxy (#59): the client hint
+    # points HTTP(S)_PROXY at the Bridge itself, which is stopped during
+    # install/update. Strip proxy/venv vars for this process so downloads,
+    # uv's Python provisioning and the delegated sync never dial it.
+    # Env: is case-insensitive on Windows (covers http_proxy et al).
+    foreach ($name in 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'VIRTUAL_ENV') {
+        Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+    }
+
     if (-not $Channel -and $env:BRIDGE_CHANNEL) { $Channel = $env:BRIDGE_CHANNEL }
     if (-not $SourceTarball -and $env:BRIDGE_SOURCE_TARBALL) { $SourceTarball = $env:BRIDGE_SOURCE_TARBALL }
     $IsDryRun = [bool]($DryRun.IsPresent -or ($env:BRIDGE_DRYRUN -and $env:BRIDGE_DRYRUN -ne '0'))

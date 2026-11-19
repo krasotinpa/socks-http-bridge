@@ -106,13 +106,24 @@ def find_uv() -> str:
     raise InstallError("uv not found; set UV_BIN or add uv to PATH")
 
 
+# The Bridge cannot be its own bootstrap proxy (#59): the client hint
+# sets HTTP(S)_PROXY at the Bridge itself, which is stopped during a
+# fresh install or an update's uv sync. VIRTUAL_ENV from a dev shell
+# mismatches the app venv. Case-insensitive: Windows env is case-blind.
+_STRIPPED_ENV_VARS = frozenset({"http_proxy", "https_proxy", "all_proxy",
+                            "virtual_env"})
+
+
 def run(cmd: list[str], *,
         cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     """The subprocess-runner seam: every external command goes through
-    here, console hidden. Callers check returncode themselves."""
+    here, console hidden, proxy/venv env stripped (#59). Callers check
+    returncode themselves."""
+    env = {k: v for k, v in os.environ.items()
+           if k.lower() not in _STRIPPED_ENV_VARS}
     return subprocess.run(
         cmd, check=False, capture_output=True, text=True, encoding="utf-8",
-        creationflags=subprocess.CREATE_NO_WINDOW, cwd=cwd)
+        creationflags=subprocess.CREATE_NO_WINDOW, cwd=cwd, env=env)
 
 
 def enumerate_processes() -> list[Proc]:
@@ -155,6 +166,9 @@ def spawn_tray(pythonw: Path, repo_root: Path) -> None:
     # The hosted bootstrapper runs this script with PYTHONPATH pointing at
     # its temp staging src (#49); the detached tray must not inherit it —
     # the staging dir is deleted right after, the app venv owns imports.
+    # The runtime tray keeps the user's env (proxy vars included): per #59
+    # only installer-time subprocesses (run()) need sanitizing. Strip just
+    # PYTHONPATH so the app venv's packages win over any dev-shell leak.
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     subprocess.Popen(
         [str(pythonw), "-m", "socks_http_bridge", "--tray"],
