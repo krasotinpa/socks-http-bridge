@@ -34,14 +34,52 @@ any VPN that provides a local SOCKS5 proxy.
 
 ## Install
 
-Prerequisites:
+### One-liner (recommended)
 
-- Windows with [uv](https://docs.astral.sh/uv/) and Python 3.13+ (uv can
-  install Python for you).
-- A VPN running with a local SOCKS5 proxy (the Upstream) — e.g. AdGuard VPN on
-  `127.0.0.1:9090`. Any other SOCKS5 address works too: change it in Settings.
+Windows only. No git, no Python, no uv needed up front — the bootstrapper
+acquires uv (and Python through uv) itself. A VPN with a local SOCKS5 proxy
+(the Upstream) must be running — e.g. AdGuard VPN on `127.0.0.1:9090`; any
+other SOCKS5 address works too, change it in Settings.
 
-From the repo root:
+Paste into PowerShell:
+
+```
+powershell -ExecutionPolicy ByPass -NoProfile -Command "irm https://raw.githubusercontent.com/krasotinpa/socks-http-bridge/main/scripts/install.ps1 | iex"
+```
+
+The Bridge is installed to `%LOCALAPPDATA%\socks-http-bridge\app`, the
+Startup shortcut `SocksHttpBridge.lnk` is created, the tray starts (unless
+another tray instance already holds the single-instance mutex), and the
+first configured Listener (default `127.0.0.1:8118`) is verified. The
+summary prints the client environment variables and the Exit IP Test hint. Failures are fail-fast: re-run the same one-liner to
+retry.
+
+The `irm | iex` form cannot pass parameters — environment variables are the
+overrides. Set `$env:BRIDGE_DRYRUN = '1'` before the one-liner to print the
+plan without changes.
+
+### Update
+
+Re-run the same one-liner — install and update converge:
+
+- An up-to-date re-run with the tray running is a no-op: nothing is stopped.
+- An update restarts the tray to load the new code: **active Tunnels drop
+  and clients reconnect on their own**, as with Apply. Update at a
+  convenient moment.
+- A fresh install never stops a running process; only an update restarts
+  the tray.
+
+Channels: `stable` (the latest GitHub Release) is the default; `main` (the
+latest committed code) is an explicit choice. Set `$env:BRIDGE_CHANNEL =
+'main'` before the one-liner to switch. The choice is persisted in the
+install marker, so a bare re-run never silently switches a `main` install
+back to `stable`.
+
+### From source (contributors)
+
+Prerequisites: Windows with [uv](https://docs.astral.sh/uv/) and Python
+3.13+ (uv can install Python for you), and a VPN with a local SOCKS5 proxy
+(the Upstream) running. From the repo root:
 
 ```
 uv run python scripts/install.py
@@ -61,10 +99,16 @@ What the script does, in order:
    files are never touched.
 3. Starts the tray app detached (no console). Re-runs are safe: an
    already-correct shortcut and an already-running tray are skipped
-   (single-instance mutex). No running process is ever stopped.
+   (single-instance mutex). The script never stops a running process:
+   after `git pull`, Exit the tray and re-run to load new code.
 4. Verifies the first configured Listener (default `127.0.0.1:8118`) answers
    within ~10 s; on failure it prints the log path
    (`%LOCALAPPDATA%\socks-http-bridge\bridge.log`).
+
+The git checkout and the hosted app dir coexist; the Startup shortcut pins
+whichever was installed last.
+
+### Configure clients
 
 Point HTTP-only clients at the Bridge (no `ALL_PROXY`):
 
@@ -80,10 +124,23 @@ Verify the exit IP is the VPN's:
 curl -x http://127.0.0.1:8118 https://api.ipify.org
 ```
 
+### Uninstall
+
+Manual (an uninstall flag is deferred):
+
+1. Tray menu → Exit.
+2. Remove the Startup shortcut: Settings → uncheck Autostart, or delete
+   `SocksHttpBridge.lnk` from the Startup folder (Win+R → `shell:startup`).
+3. Delete the app dir `%LOCALAPPDATA%\socks-http-bridge\app`. Config and log
+   live one level up (`%LOCALAPPDATA%\socks-http-bridge`) and are shared with
+   any coexisting from-source install — delete that directory too only if
+   you want the Bridge fully gone.
+
 ## Layout
 
 - `src/socks_http_bridge/` — the application: tunneling core, tray, UI.
-- `scripts/install.py` — idempotent installer.
+- `scripts/install.py` — idempotent installer and hosted update core.
+- `scripts/install.ps1` — hosted one-liner bootstrapper (install/update).
 - `tests/` — hermetic test suite (ephemeral ports, no live Bridge or Upstream).
 - `docs/adr/` — architecture decision records.
 - `GLOSSARY.md` — domain language.
