@@ -152,9 +152,13 @@ def switch_startup_shortcut(startup_dir: Path, pythonw: Path) -> None:
 
 def spawn_tray(pythonw: Path, repo_root: Path) -> None:
     """The Popen seam: detached tray launch, no console, survives exit."""
+    # The hosted bootstrapper runs this script with PYTHONPATH pointing at
+    # its temp staging src (#49); the detached tray must not inherit it —
+    # the staging dir is deleted right after, the app venv owns imports.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     subprocess.Popen(
         [str(pythonw), "-m", "socks_http_bridge", "--tray"],
-        cwd=str(repo_root), close_fds=True,
+        cwd=str(repo_root), close_fds=True, env=env,
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW)
 
 
