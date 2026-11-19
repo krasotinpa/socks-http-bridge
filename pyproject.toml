@@ -3,6 +3,11 @@ name = "socks-http-bridge"
 version = "0.1.0"
 description = "Windows tray app bridging local HTTP proxy Listeners to one SOCKS5 Upstream"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+]
 requires-python = ">=3.13"
 dependencies = [
     "pystray>=0.19",
