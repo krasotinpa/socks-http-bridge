@@ -12,10 +12,12 @@ import sys
 import threading
 import time
 import tkinter as tk
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageDraw
 from test_cli_config import _wait_for_listener
 
 from socks_http_bridge import tray
@@ -91,6 +93,36 @@ def test_icon_image_colour_per_state() -> None:
     for state, rgb in expected.items():
         image = tray.make_icon_image(state)
         assert image.getpixel((32, 32)) == (*rgb, 255)
+
+
+def test_icon_glyph_is_not_a_solid_blob() -> None:
+    # Issue #45: a plain filled circle has no enclosed negative space; the
+    # Bridge glyph must. Flood-fill transparency from the corner: any
+    # transparent pixel the fill cannot reach is a hole enclosed by the glyph.
+    alpha = tray.make_icon_image(BridgeState.RUNNING).getchannel("A").copy()
+    ImageDraw.floodfill(alpha, (0, 0), 128)
+    assert alpha.histogram()[0] > 0, "solid blob: no enclosed negative space"
+
+
+def test_icon_legible_at_16px_tray_size() -> None:
+    # Issue #45: strokes must survive the downscale to the Windows tray
+    # size, and the three Bridge States must stay distinguishable there.
+    expected = {
+        BridgeState.RUNNING: (0, 160, 0),
+        BridgeState.STOPPED: (128, 128, 128),
+        BridgeState.ERROR: (200, 0, 0),
+    }
+    for state, rgb in expected.items():
+        small = tray.make_icon_image(state).resize((16, 16), Image.LANCZOS)
+        px = small.load()
+        opaque = [px[x, y][:3] for x in range(16) for y in range(16)
+                  if px[x, y][3] >= 200]
+        assert len(opaque) >= 30, "glyph too thin to read at 16 px"
+        dominant = Counter(opaque).most_common(1)[0][0]
+        nearest = min(expected.values(),
+                      key=lambda c: sum((a - b) ** 2
+                                        for a, b in zip(c, dominant)))
+        assert nearest == rgb, f"{state}: states indistinguishable at 16 px"
 
 
 def test_status_line_first_listener_plus_count() -> None:
