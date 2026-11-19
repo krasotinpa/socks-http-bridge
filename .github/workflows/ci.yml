@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,3 +32,135 @@ jobs:
         run: uv run mypy src
       - name: Tests
         run: uv run pytest
+
+  # Issue #50 (spec #26): prove the one-liner against the PR's own code.
+  # Runs on manual dispatch and on PRs touching installer files; the gate
+  # step skips the heavy work otherwise. No Upstream exists on the runner,
+  # so the Listener answering 502 is a pass.
+  e2e-smoke:
+    name: e2e smoke (one-liner)
+    if: github.event_name != 'push'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      UV_PYTHON: "3.13"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Gate on installer changes
+        id: gate
+        shell: powershell
+        run: |
+          # runner context is not allowed in job-level env; export the scratch
+          # paths once here so every later step inherits them.
+          "BRIDGE_INSTALL_DIR=$(Join-Path $env:RUNNER_TEMP 'bridge-app')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          "BRIDGE_SOURCE_TARBALL=$(Join-Path $env:RUNNER_TEMP 'bridge-smoke.tar.gz')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            'run=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+            exit 0
+          }
+          $changed = git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hit = @($changed | Where-Object {
+            $_ -match '^scripts/install\.(ps1|py)$|^\.github/workflows/ci\.yml$'
+          })
+          $run = if ($hit.Count -gt 0) { 'true' } else { 'false' }
+          "run=$run" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+          Write-Host "installer files changed: $($hit -join ', ') (smoke run=$run)"
+
+      - name: Build source tarball from this checkout
+        if: steps.gate.outputs.run == 'true'
+        shell: powershell
+        run: |
+          git archive --format=tar.gz --prefix=socks-http-bridge-smoke/ -o $env:BRIDGE_SOURCE_TARBALL HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The delivered irm|iex form: env overrides only, no parameters.
+      # uv is bootstrapped by the script itself (no setup-uv in this job).
+      - name: Clean install (iex form, source override)
+        if: steps.gate.outputs.run == 'true'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Invoke-Expression (Get-Content -Raw .\scripts\install.ps1)" 2>&1
+          $code = $LASTEXITCODE
+          $out | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (-not ($out -match 'Bridge ready: channel stable, target local')) {
+            throw 'clean install did not reach the ready report'
+          }
+          if (-not ($out -match 'Bootstrapping uv')) {
+            throw 'uv bootstrap was not exercised (preinstalled uv on the runner?)'
+          }
+          if (-not ($out -match 'Syncing dependencies')) {
+            throw 'uv sync was not exercised'
+          }
+          $marker = Get-Content (Join-Path $env:BRIDGE_INSTALL_DIR 'install-marker.json') -Raw | ConvertFrom-Json
+          if ($marker.channel -ne 'stable' -or $marker.version -ne 'local') {
+            throw "unexpected install marker: channel=$($marker.channel) version=$($marker.version)"
+          }
+
+      - name: Smoke Listener over HTTP (502 tolerated)
+        if: steps.gate.outputs.run == 'true'
+        shell: powershell
+        run: |
+          $httpStatus = curl.exe --proxy http://127.0.0.1:8118 --max-time 20 -s -o NUL -w '%{http_code}' http://example.com/
+          Write-Host "HTTP status via Listener: $httpStatus"
+          if ($httpStatus -notin @('200', '502')) { throw "Listener did not answer HTTP (got '$httpStatus')" }
+
+      # A new target forces the real update path: stop -> swap -> restart.
+      - name: Re-run as update (new target, -File form)
+        if: steps.gate.outputs.run == 'true'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\install.ps1 -SourceTarball $env:BRIDGE_SOURCE_TARBALL -Version smoke-2 2>&1
+          $code = $LASTEXITCODE
+          $out | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (-not ($out -match 'Stopping the running tray')) {
+            throw 're-run did not take the update path (no tray stop)'
+          }
+          $marker = Get-Content (Join-Path $env:BRIDGE_INSTALL_DIR 'install-marker.json') -Raw | ConvertFrom-Json
+          if ($marker.version -ne 'smoke-2') { throw "marker not updated: $($marker.version)" }
+
+      - name: Smoke Listener after update restart (502 tolerated)
+        if: steps.gate.outputs.run == 'true'
+        shell: powershell
+        run: |
+          $httpStatus = curl.exe --proxy http://127.0.0.1:8118 --max-time 20 -s -o NUL -w '%{http_code}' http://example.com/
+          Write-Host "HTTP status via Listener: $httpStatus"
+          if ($httpStatus -notin @('200', '502')) { throw "Listener did not answer HTTP after update (got '$httpStatus')" }
+
+      - name: Up-to-date re-run is a no-op
+        if: steps.gate.outputs.run == 'true'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $findTray = {
+            Get-CimInstance Win32_Process | Where-Object {
+              $_.CommandLine -like '*--tray*' -and $_.CommandLine -like "*$env:BRIDGE_INSTALL_DIR*"
+            } | Select-Object -First 1 -ExpandProperty ProcessId
+          }
+          $before = & $findTray
+          if (-not $before) { throw 'no tray running before the no-op re-run' }
+          $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\install.ps1 -SourceTarball $env:BRIDGE_SOURCE_TARBALL -Version smoke-2 2>&1
+          $code = $LASTEXITCODE
+          $out | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (-not ($out -match 'Already up to date: channel stable, target smoke-2')) {
+            throw 'up-to-date re-run was not a no-op'
+          }
+          $after = & $findTray
+          if ($after -ne $before) { throw "no-op changed the tray PID ($before -> $after)" }
+
+      - name: Stop the smoke tray (best effort)
+        if: always() && steps.gate.outputs.run == 'true'
+        shell: powershell
+        run: |
+          Get-CimInstance Win32_Process | Where-Object {
+            $_.CommandLine -like '*--tray*' -and $_.CommandLine -like "*$env:BRIDGE_INSTALL_DIR*"
+          } | ForEach-Object { taskkill /F /PID $_.ProcessId }
+          exit 0
