@@ -8,6 +8,10 @@ false-positive risk that ADR-0002 rejected. We therefore distribute source only:
 the repository is the install source, and each GitHub Release carries the sdist
 and wheel built with `uv build` for users who prefer artifacts over a checkout.
 
+ADR-0004 (hosted PowerShell one-liner) amends the update path for end users:
+re-running the one-liner replaces `git pull` + installer re-run on the hosted
+path; the git install path below remains the contributor path.
+
 ## Consequences
 
 - Version identity: the release tag matches the package version in
