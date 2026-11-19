@@ -127,6 +127,30 @@ def test_menu_fetches_via_first_listener_off_ui_thread_and_popups_result(
     assert shell.notifications == []
 
 
+@pytest.mark.parametrize(("wildcard", "loopback"), [
+    ("0.0.0.0", "127.0.0.1"),
+    ("::", "::1"),
+])
+def test_wildcard_listener_is_normalized_to_loopback_for_the_fetch(
+        monkeypatch: pytest.MonkeyPatch, wildcard: str, loopback: str) -> None:
+    # connect() to a wildcard bind address fails on Windows (WinError
+    # 10049); the Exit IP Test must dial the loopback equivalent instead.
+    shell = FakeShell([(wildcard, 18118)])
+    calls: list[tuple[str, int]] = []
+
+    def fake_fetch(proxy_address: tuple[str, int], test_url: str,
+                   timeout: float = 10.0) -> ExitIpResult:
+        calls.append(proxy_address)
+        return ExitIpResult(ip="203.0.113.7")
+
+    popup = PopupRecorder()
+    monkeypatch.setattr(exit_ip, "fetch_exit_ip", fake_fetch)
+    monkeypatch.setattr(exit_ip_ui, "show_popup", popup)
+    exit_ip_ui.run_test(shell)
+    assert popup.done.wait(5)
+    assert calls == [(loopback, 18118)]
+
+
 def test_run_test_returns_while_fetch_runs_and_reclick_is_ignored(
         monkeypatch: pytest.MonkeyPatch) -> None:
     shell = FakeShell([("127.0.0.1", 18118)])

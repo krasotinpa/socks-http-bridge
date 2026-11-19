@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from socks_http_bridge.config import Config, ConfigError
+from socks_http_bridge.config import Config, ConfigError, connect_target
 
 
 def write_config(path: Path, data: object) -> Path:
@@ -94,3 +94,18 @@ def test_save_rejects_invalid_config(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="listeners"):
         Config(listeners=[]).save(tmp_path / "config.json")
     assert not (tmp_path / "config.json").exists()
+
+
+@pytest.mark.parametrize(("address", "expected"), [
+    (("0.0.0.0", 18118), ("127.0.0.1", 18118)),
+    (("::", 18118), ("::1", 18118)),
+    (("127.0.0.1", 18118), ("127.0.0.1", 18118)),
+    (("::1", 18118), ("::1", 18118)),
+    (("192.168.1.10", 18118), ("192.168.1.10", 18118)),
+    (("bridge.lan", 18118), ("bridge.lan", 18118)),
+])
+def test_connect_target_maps_wildcards_to_loopback_for_self_connect(
+        address: tuple[str, int], expected: tuple[str, int]) -> None:
+    # Windows rejects connect() to a wildcard bind address (WinError
+    # 10049); only self-connect targets are normalized, never bind hosts.
+    assert connect_target(address) == expected

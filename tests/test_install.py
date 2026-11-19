@@ -208,6 +208,17 @@ def test_verify_failure_reports_log_path(
     assert "bridge.log" in out and "8118" in out
 
 
+def test_verify_wildcard_listener_connects_via_loopback(
+        rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    # connect() to a wildcard bind address fails on Windows (WinError
+    # 10049); verify must dial the loopback equivalent instead.
+    monkeypatch.setattr(install, "_load_config",
+                        lambda: Config(listeners=["0.0.0.0:18118"]))
+    assert install.install(rig.repo, startup_dir=rig.startup) == 0
+    verify = [e for e in rig.events if e[0] == "verify"]
+    assert verify == [("verify", ("127.0.0.1", 18118), 10.0)]
+
+
 # --- Shortcut cutover: real .lnk files in tmp_path, real autostart core ---
 
 def make_lnk(lnk: Path, target: str, arguments: str) -> None:

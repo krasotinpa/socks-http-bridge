@@ -19,6 +19,7 @@ import tkinter as tk
 from typing import TYPE_CHECKING
 
 from socks_http_bridge import exit_ip
+from socks_http_bridge.config import connect_target
 
 if TYPE_CHECKING:
     from socks_http_bridge.tray import TrayShell
@@ -70,7 +71,7 @@ def _worker(shell: "TrayShell") -> None:
             return
         try:
             result = exit_ip.fetch_exit_ip(
-                addresses[0], shell.config.test_url,
+                connect_target(addresses[0]), shell.config.test_url,
                 timeout=exit_ip.DEFAULT_TIMEOUT)
         # Any failure must reach the popup; a bare raise in a daemon thread
         # would vanish under pythonw and leave the user no feedback.
