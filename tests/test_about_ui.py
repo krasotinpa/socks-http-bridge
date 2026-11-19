@@ -119,3 +119,19 @@ def test_menu_action_returns_at_once_and_reclick_is_ignored(
     about_ui.show_about(shell)  # once closed, About may open again
     assert started.wait(5)
     assert len(pops) == 2
+
+
+def test_worker_failure_reaches_the_user_as_a_balloon(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    # exit_ip_ui pattern: a bare raise in a daemon thread would vanish
+    # under pythonw; a broken popup must still give the user feedback.
+    shell = FakeShell()
+
+    def broken_popup(sh: FakeShell) -> None:
+        raise RuntimeError("Tk exploded")
+
+    monkeypatch.setattr(about_ui, "show_popup", broken_popup)
+    about_ui.show_about(shell)
+    _wait_worker_idle()
+    assert len(shell.notifications) == 1
+    assert "Tk exploded" in shell.notifications[0][0]

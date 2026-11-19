@@ -52,6 +52,10 @@ def _worker(shell: "TrayShell") -> None:
     global _active
     try:
         show_popup(shell)
+    # Any failure must reach the user; a bare raise in a daemon thread
+    # would vanish under pythonw and leave no feedback (exit_ip_ui pattern).
+    except Exception as exc:  # noqa: BLE001
+        shell.notify(f"About window failed: {exc}")
     finally:
         with _lock:
             _active = None
