@@ -3,6 +3,8 @@
 A configurable HTTP→SOCKS5 bridge for Windows, living in the system tray.
 Point HTTP-only clients at it and they exit through any SOCKS5 VPN.
 
+[![CI](https://github.com/krasotinpa/socks-http-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/krasotinpa/socks-http-bridge/actions/workflows/ci.yml)
+
 ## Why
 
 Some HTTP-only clients cannot use a SOCKS5 proxy directly: Codex CLI and the

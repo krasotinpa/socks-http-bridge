@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: checks (${{ matrix.python-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.15"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Sync locked dependencies
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check .
+      - name: Typecheck
+        run: uv run mypy src
+      - name: Tests
+        run: uv run pytest

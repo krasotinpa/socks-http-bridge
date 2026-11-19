@@ -20,8 +20,9 @@ conversation has one reader, the repository has many.
 - Implementation follows the matt-pocock implement skill: tdd at the agreed seams,
   regular typecheck and single-file test runs, full suite at the end, then the
   code-review skill before opening the PR.
-- **Checks**: this repository has no CI, so run the checks locally before opening or
-  updating a PR and put a summary of what ran and how it ended in the PR body:
+- **Checks**: CI (`.github/workflows/ci.yml`) runs lint, typecheck and tests on Windows
+  (Python 3.13 + 3.15) for every PR and push to main. Still run the checks locally before
+  opening or updating a PR and put a summary of what ran and how it ended in the PR body:
 
   ```
   uv run pytest
