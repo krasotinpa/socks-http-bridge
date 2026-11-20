@@ -195,6 +195,69 @@ def test_noop_start_keeps_listener_failure_error() -> None:
             health.stop()
 
 
+def test_partial_listener_failure_degrades_and_probes_keep_it() -> None:
+    with _CountingListener() as upstream:
+        health = BridgeHealth(upstream.address, probe_interval=0.05)
+        transitions: list[tuple[BridgeState, BridgeState]] = []
+        health.subscribe(lambda old, new: transitions.append((old, new)))
+        health.start()
+        try:
+            _wait_state(health, BridgeState.RUNNING)
+            health.listener_failed(partial=True)
+            assert health.state is BridgeState.DEGRADED
+            # Some Listeners still serve and the Upstream answers Probes:
+            # Degraded holds, not Running and not Error (issue #65).
+            time.sleep(0.2)
+            assert health.state is BridgeState.DEGRADED
+            assert transitions == [(BridgeState.STOPPED, BridgeState.RUNNING),
+                                   (BridgeState.RUNNING, BridgeState.DEGRADED)]
+        finally:
+            health.stop()
+
+
+def test_probe_failure_while_partial_reports_error() -> None:
+    health = BridgeHealth(("127.0.0.1", _closed_port()), probe_interval=0.05)
+    health.start()
+    try:
+        _wait_state(health, BridgeState.ERROR)
+        health.listener_failed(partial=True)
+        assert health.state is BridgeState.DEGRADED  # optimistic at Start
+        _wait_state(health, BridgeState.ERROR)  # the next Probe corrects it
+        time.sleep(0.15)
+        assert health.state is BridgeState.ERROR  # red dominates
+    finally:
+        health.stop()
+
+
+def test_listener_recovered_from_partial_restores_running() -> None:
+    with _CountingListener() as upstream:
+        health = BridgeHealth(upstream.address, probe_interval=0.05)
+        health.start()
+        try:
+            _wait_state(health, BridgeState.RUNNING)
+            health.listener_failed(partial=True)
+            assert health.state is BridgeState.DEGRADED
+            health.listener_recovered()
+            _wait_state(health, BridgeState.RUNNING)
+        finally:
+            health.stop()
+
+
+def test_noop_start_keeps_partial_degraded() -> None:
+    with _CountingListener() as upstream:
+        health = BridgeHealth(upstream.address, probe_interval=0.05)
+        health.start()
+        try:
+            _wait_state(health, BridgeState.RUNNING)
+            health.listener_failed(partial=True)
+            health.start()  # pure no-op: the partial latch survives
+            time.sleep(0.2)
+            assert health.state is BridgeState.DEGRADED
+        finally:
+            health.stop()
+
+
+
 def test_stop_then_start_resumes_probe() -> None:
     port = _closed_port()
     health = BridgeHealth(("127.0.0.1", port), probe_interval=0.05)

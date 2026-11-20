@@ -1,7 +1,8 @@
 """Tray Shell: the Bridge lives in the Windows tray (GLOSSARY.md).
 
-One pythonw process, icon coloured by Bridge State, menu with the status
-line, Stop/Start, Open log and Exit. Observes Bridge State only through the
+One pythonw process, icon coloured by Bridge State, hover tooltip with
+per-Listener/Upstream status, menu with the status line, Stop/Start, Open
+log and Exit. Observes Bridge State only through the
 Health interface (``state`` + ``subscribe``); no UI code lives in Health or
 Tunneling. Feature UIs are separate modules pre-wired into the menu:
 exit_ip_ui (issue #6), settings (issue #7) and about_ui (issue #35).
@@ -29,7 +30,18 @@ STATE_COLORS: dict[BridgeState, tuple[int, int, int]] = {
     BridgeState.RUNNING: (0, 160, 0),    # green
     BridgeState.STOPPED: (128, 128, 128),  # grey
     BridgeState.ERROR: (200, 0, 0),      # red
+    BridgeState.DEGRADED: (230, 160, 0),  # amber
 }
+
+TIP_MAX = 127  # NOTIFYICONDATAW.szTip: 128 WCHARs incl. the terminator
+DOT_OK = "\U0001F7E2"    # green circle
+DOT_BAD = "\U0001F534"   # red circle
+DOT_UNKNOWN = "\u26AA"   # white circle: not probed
+
+
+def _tip_len(text: str) -> int:
+    """Length in UTF-16 units: szTip counts WCHARs, emoji cost two."""
+    return len(text.encode("utf-16-le")) // 2
 
 
 def make_icon_image(state: BridgeState) -> Image.Image:
@@ -87,6 +99,7 @@ class TrayShell:
         # shared lock across health.start()'s Probe join would stall them ~3 s.
         self._listener_lock = threading.Lock()
         self._health.subscribe(self._on_state)
+        self._refresh_tooltip()
 
     @property
     def config(self) -> Config:
@@ -109,10 +122,58 @@ class TrayShell:
         current = self._health.state
         with self._lock:
             previous, self._last_state = self._last_state, current
-        if previous is BridgeState.RUNNING and current is BridgeState.ERROR:
+        if current is BridgeState.DEGRADED and previous is BridgeState.RUNNING:
+            failed = ", ".join(f"{h}:{p}" for h, p in list(self._failed))
+            self.notify(f"Listener {failed} failed to bind; retrying")
+        elif (current is BridgeState.ERROR
+              and previous in (BridgeState.RUNNING, BridgeState.DEGRADED)):
             self.notify("Upstream unreachable or Listener failed to bind")
         self._icon.icon = make_icon_image(current)
         self._icon.update_menu()
+        self._refresh_tooltip()
+
+    def _refresh_tooltip(self) -> None:
+        """Hover tooltip: Bridge State plus a dot per Listener and Upstream.
+
+        Hint only — a snapshot a few ms stale is fine; the next transition
+        or bind refreshes it. Takes no _listener_lock: stop() fires
+        _on_state synchronously while the caller holds that lock.
+        """
+        bound: set[tuple[str, int]] = set()
+        for srv in list(self._servers):
+            try:
+                bound.add(srv.getsockname())
+            except OSError:
+                pass  # closed concurrently by Stop
+        state = self._health.state
+        if state in (BridgeState.RUNNING, BridgeState.DEGRADED):
+            up_dot = DOT_OK
+        elif state is BridgeState.ERROR and bound:
+            up_dot = DOT_BAD
+        else:
+            up_dot = DOT_UNKNOWN  # Stopped, or Error with no Probe running
+        header = f"Socks HTTP Bridge — {state}"
+        up_line = f"{up_dot} Upstream {self._upstream[0]}:{self._upstream[1]}"
+        lines = [f"{DOT_OK if a in bound else DOT_BAD} {a[0]}:{a[1]}"
+                 for a in self._addresses]
+        text = "\n".join([header, *lines, up_line])
+        if _tip_len(text) <= TIP_MAX:
+            self._icon.title = text
+            return
+        # Too many Listeners for szTip: keep the head, note the remainder.
+        budget = TIP_MAX - _tip_len(header) - _tip_len(up_line) - 12
+        kept: list[str] = []
+        used = 0
+        for line in lines:
+            cost = _tip_len(line) + 1
+            if used + cost > budget:
+                break
+            kept.append(line)
+            used += cost
+        dropped = len(lines) - len(kept)
+        text = "\n".join([header, *kept, f"…+{dropped} more", up_line])
+        self._icon.title = text.encode("utf-16-le")[:TIP_MAX * 2].decode(
+            "utf-16-le", errors="ignore")
 
     def _build_menu(self) -> pystray.Menu:
         return pystray.Menu(
@@ -153,7 +214,7 @@ class TrayShell:
                 srv.listen(128)
             except OSError as exc:
                 # A taken port must not kill the Bridge: the other Listeners
-                # keep serving, and Bridge State reports Error.
+                # keep serving; Bridge State reports Degraded (Error if none).
                 srv.close()
                 log.error("Listener %s:%s failed to bind: %s", host, port, exc)
                 self._failed.append((host, port))
@@ -171,7 +232,7 @@ class TrayShell:
                 # below (or the user) can free the port and Start again.
                 log.error("No Listener could take its port")
             # After start(): start() resets Listener failures, a new attempt.
-            self._health.listener_failed()
+            self._health.listener_failed(partial=bool(self._servers))
             self._retry_stop = threading.Event()
             threading.Thread(target=self._retry_failed_listeners,
                              args=(self._retry_stop,), daemon=True,
@@ -199,6 +260,7 @@ class TrayShell:
                              host, port, *self._upstream)
                     threading.Thread(target=self._accept_loop, args=(srv,),
                                      daemon=True).start()
+                    self._refresh_tooltip()  # coverage changed, state maybe not
                 if not self._failed:
                     # start() is a no-op while the Probe lives; it starts the
                     # Probe when every Listener had failed at Start.
@@ -225,7 +287,7 @@ class TrayShell:
         Active Tunnels drop (clients reconnect on their own); the Probe
         follows a changed Upstream/interval. Worker-thread only: the restart
         may join the old Probe for up to ~3 s. Bind failures follow the
-        Start pattern: log + listener_failed(), Bridge State Error.
+        Start pattern: log + listener_failed(), Degraded or Error.
         """
         with self._listener_lock:
             for client in self._clients:

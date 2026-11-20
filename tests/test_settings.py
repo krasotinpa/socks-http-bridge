@@ -283,7 +283,7 @@ def test_restart_probe_follows_new_upstream(tmp_path: Path) -> None:
             shell.stop_listeners()
 
 
-def test_restart_bind_failure_reports_error_and_keeps_others(
+def test_restart_bind_failure_reports_degraded_and_keeps_others(
         tmp_path: Path) -> None:
     with _ProbeUpstream() as upstream:
         # Exclusive taker (no SO_REUSEADDR): on Windows REUSEADDR sockets may
@@ -306,7 +306,7 @@ def test_restart_bind_failure_reports_error_and_keeps_others(
                                     f"127.0.0.1:{free_port}"],
                          upstream=up_text, log_path=log_path)
             shell.restart_listeners(cfg)
-            _wait_state(health, BridgeState.ERROR)
+            _wait_state(health, BridgeState.DEGRADED)
             _serves(free_port)  # the other Listener keeps serving
             _refused(taken_port)
             taken.close()
