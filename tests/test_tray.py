@@ -31,6 +31,7 @@ class FakeIcon:
     def __init__(self) -> None:
         self.notifications: list[tuple[str, str | None]] = []
         self.icon: object = None
+        self.title = "Socks HTTP Bridge"
         self.menu_updates = 0
         self.stopped = threading.Event()
 
@@ -60,8 +61,12 @@ class FakeHealth:
     def stop(self) -> None:
         self.state = BridgeState.STOPPED
 
-    def listener_failed(self) -> None:
-        self.state = BridgeState.ERROR
+    def listener_failed(self, partial: bool = False) -> None:
+        self.state = (BridgeState.DEGRADED if partial
+                      else BridgeState.ERROR)
+
+    def listener_recovered(self) -> None:
+        pass
 
 
 def _wait_state(health: BridgeHealth, state: BridgeState,
@@ -84,11 +89,13 @@ def _listener_socket(port: int = 0) -> socket.socket:
 
 
 def test_icon_image_colour_per_state() -> None:
-    # Independent truth: green Running, grey Stopped, red Error (issue #5).
+    # Independent truth: green Running, amber Degraded, grey Stopped,
+    # red Error (issues #5, #65).
     expected = {
         BridgeState.RUNNING: (0, 160, 0),
         BridgeState.STOPPED: (128, 128, 128),
         BridgeState.ERROR: (200, 0, 0),
+        BridgeState.DEGRADED: (230, 160, 0),
     }
     for state, rgb in expected.items():
         image = tray.make_icon_image(state)
@@ -106,11 +113,12 @@ def test_icon_glyph_is_not_a_solid_blob() -> None:
 
 def test_icon_legible_at_16px_tray_size() -> None:
     # Issue #45: strokes must survive the downscale to the Windows tray
-    # size, and the three Bridge States must stay distinguishable there.
+    # size, and the four Bridge States must stay distinguishable there.
     expected = {
         BridgeState.RUNNING: (0, 160, 0),
         BridgeState.STOPPED: (128, 128, 128),
         BridgeState.ERROR: (200, 0, 0),
+        BridgeState.DEGRADED: (230, 160, 0),
     }
     for state, rgb in expected.items():
         small = tray.make_icon_image(state).resize((16, 16), Image.LANCZOS)
@@ -221,7 +229,7 @@ def test_toggle_stops_and_starts_listeners(tmp_path: Path) -> None:
         upstream.close()
 
 
-def test_bind_failure_keeps_error_until_restart(tmp_path: Path) -> None:
+def test_bind_failure_degrades_until_restart(tmp_path: Path) -> None:
     upstream = _listener_socket()
     # Kept bound WITHOUT SO_REUSEADDR: on Windows two REUSEADDR sockets may
     # share a port, so the taker must be exclusive (as in test_cli_health).
@@ -242,7 +250,7 @@ def test_bind_failure_keeps_error_until_restart(tmp_path: Path) -> None:
                            icon=FakeIcon(), health=health)
     try:
         shell.start_listeners()
-        _wait_state(health, BridgeState.ERROR)
+        _wait_state(health, BridgeState.DEGRADED)
         _serves(free_port)  # the other Listener keeps serving
         assert shell.listener_addresses == [("127.0.0.1", free_port)]
         shell.stop_listeners()
@@ -309,7 +317,7 @@ def test_failed_listener_rebinds_once_its_port_frees(tmp_path: Path) -> None:
         _shell_with_one_taken_listener(tmp_path))
     try:
         shell.start_listeners()
-        _wait_state(health, BridgeState.ERROR)
+        _wait_state(health, BridgeState.DEGRADED)
         _serves(free_port)  # the other Listener keeps serving
         taken.close()  # the port frees; nobody restarts the Bridge
         _wait_state(health, BridgeState.RUNNING)
@@ -328,7 +336,7 @@ def test_stop_cancels_listener_retry(tmp_path: Path) -> None:
         _shell_with_one_taken_listener(tmp_path))
     try:
         shell.start_listeners()
-        _wait_state(health, BridgeState.ERROR)
+        _wait_state(health, BridgeState.DEGRADED)
         shell.stop_listeners()
         taken.close()  # free the port AFTER the user Stop
         time.sleep(2.5)  # more than one retry interval
@@ -362,6 +370,155 @@ def test_all_listeners_failed_recovers_and_starts_probe(tmp_path: Path) -> None:
         taken.close()
         taker2.close()
         upstream.close()
+
+
+def test_tooltip_lists_listener_and_upstream_status(tmp_path: Path) -> None:
+    shell, health, taken, taken_port, free_port, upstream = (
+        _shell_with_one_taken_listener(tmp_path))
+    icon = shell._icon
+    try:
+        shell.start_listeners()
+        _wait_state(health, BridgeState.DEGRADED)
+        tip = icon.title
+        assert "Degraded" in tip.splitlines()[0]
+        assert f"\U0001F534 127.0.0.1:{taken_port}" in tip
+        assert f"\U0001F7E2 127.0.0.1:{free_port}" in tip
+        up_port = upstream.getsockname()[1]
+        assert f"\U0001F7E2 Upstream 127.0.0.1:{up_port}" in tip
+        shell.stop_listeners()
+        tip = icon.title
+        assert "Stopped" in tip.splitlines()[0]
+        assert f"\U0001F534 127.0.0.1:{taken_port}" in tip
+        assert f"\U0001F534 127.0.0.1:{free_port}" in tip
+        assert "\u26AA Upstream" in tip
+    finally:
+        shell.stop_listeners()
+        taken.close()
+        upstream.close()
+
+
+def test_tooltip_updates_on_rebind_without_state_change(
+        tmp_path: Path) -> None:
+    # Two taken ports: freeing one leaves Degraded, but the tooltip must
+    # still flip that Listener's dot (issue #65).
+    upstream = _draining_upstream()
+    takers = []
+    for _ in range(2):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        takers.append(s)
+    taken_ports = [s.getsockname()[1] for s in takers]
+    reserved = _listener_socket()
+    free_port = reserved.getsockname()[1]
+    reserved.close()
+    log_path = str(tmp_path / "bridge.log")
+    listeners = [f"127.0.0.1:{p}" for p in (*taken_ports, free_port)]
+    cfg = Config(listeners=listeners,
+                 upstream=f"{upstream.getsockname()[0]}:{upstream.getsockname()[1]}",
+                 probe_interval=2, log_path=log_path)
+    health = BridgeHealth(upstream.getsockname(), probe_interval=2)
+    icon = FakeIcon()
+    shell = tray.TrayShell(cfg, [("127.0.0.1", p) for p in
+                                 (*taken_ports, free_port)],
+                           upstream.getsockname(), log_path,
+                           icon=icon, health=health)
+    try:
+        shell.start_listeners()
+        _wait_state(health, BridgeState.DEGRADED)
+        assert f"\U0001F534 127.0.0.1:{taken_ports[0]}" in icon.title
+        takers[0].close()
+        deadline = time.monotonic() + 8
+        while (time.monotonic() < deadline
+               and f"\U0001F7E2 127.0.0.1:{taken_ports[0]}" not in icon.title):
+            time.sleep(0.05)
+        assert f"\U0001F7E2 127.0.0.1:{taken_ports[0]}" in icon.title
+        assert health.state is BridgeState.DEGRADED  # taker 2 still holds
+        assert f"\U0001F534 127.0.0.1:{taken_ports[1]}" in icon.title
+    finally:
+        shell.stop_listeners()
+        for s in takers:
+            s.close()
+        upstream.close()
+
+
+def test_tooltip_truncates_long_listener_lists(tmp_path: Path) -> None:
+    # NOTIFYICONDATAW.szTip holds 128 WCHARs; emoji cost two units each.
+    addresses = [("127.0.0.1", 8100 + i) for i in range(12)]
+    log_path = str(tmp_path / "bridge.log")
+    cfg = Config(listeners=[f"{h}:{p}" for h, p in addresses],
+                 log_path=log_path)
+    shell = tray.TrayShell(cfg, addresses, ("127.0.0.1", 9090), log_path,
+                           icon=FakeIcon(), health=FakeHealth())
+    tip = shell._icon.title
+    assert len(tip.encode("utf-16-le")) // 2 <= 127
+    assert "more" in tip
+    assert tip.splitlines()[0].endswith("Stopped")
+
+
+def test_balloon_on_degraded_to_error_escalation(tmp_path: Path) -> None:
+    shell, health, taken, _taken_port, _free_port, upstream = (
+        _shell_with_one_taken_listener(tmp_path))
+    icon = shell._icon
+    try:
+        shell.start_listeners()
+        _wait_state(health, BridgeState.DEGRADED)
+        assert icon.notifications == []  # Stopped->Degraded is silent
+        upstream.close()
+        _wait_state(health, BridgeState.ERROR)
+        assert len(icon.notifications) == 1
+        assert "Upstream unreachable" in icon.notifications[0][0]
+    finally:
+        shell.stop_listeners()
+        taken.close()
+        upstream.close()
+
+
+def test_degraded_to_running_is_silent(tmp_path: Path) -> None:
+    shell, health, taken, _taken_port, _free_port, upstream = (
+        _shell_with_one_taken_listener(tmp_path))
+    icon = shell._icon
+    try:
+        shell.start_listeners()
+        _wait_state(health, BridgeState.DEGRADED)
+        taken.close()
+        _wait_state(health, BridgeState.RUNNING, timeout=10.0)
+        assert icon.notifications == []  # improvements never balloon
+    finally:
+        shell.stop_listeners()
+        taken.close()
+        upstream.close()
+
+
+def test_balloon_on_running_to_degraded_names_listener(
+        tmp_path: Path) -> None:
+    # Running->Degraded is the runtime-loss path (a bound Listener dies);
+    # drive the Health seam directly with the failed address recorded.
+    upstream = _draining_upstream()
+    reserved = _listener_socket()
+    port = reserved.getsockname()[1]
+    reserved.close()
+    log_path = str(tmp_path / "bridge.log")
+    cfg = Config(listeners=[f"127.0.0.1:{port}"],
+                 upstream=f"{upstream.getsockname()[0]}:{upstream.getsockname()[1]}",
+                 probe_interval=2, log_path=log_path)
+    health = BridgeHealth(upstream.getsockname(), probe_interval=2)
+    icon = FakeIcon()
+    shell = tray.TrayShell(cfg, [("127.0.0.1", port)],
+                           upstream.getsockname(), log_path,
+                           icon=icon, health=health)
+    try:
+        shell.start_listeners()
+        _wait_state(health, BridgeState.RUNNING)
+        shell._failed = [("127.0.0.1", port)]
+        health.listener_failed(partial=True)
+        _wait_state(health, BridgeState.DEGRADED)
+        assert len(icon.notifications) == 1
+        assert f"127.0.0.1:{port}" in icon.notifications[0][0]
+        assert "retrying" in icon.notifications[0][0]
+    finally:
+        shell.stop_listeners()
+        upstream.close()
+
 
 
 def test_menu_wires_status_stubs_and_actions(

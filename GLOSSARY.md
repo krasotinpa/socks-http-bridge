@@ -32,9 +32,10 @@ State.
 _Avoid_: healthcheck, ping
 
 **Bridge State**:
-One of Running (Listeners serve and the Upstream answers Probes), Stopped (the
-user stopped the Bridge), Error (running but the Upstream is unreachable, or a
-Listener failed to take its port).
+One of Running (every Listener serves and the Upstream answers Probes),
+Degraded (at least one Listener serves and the Upstream answers Probes, but
+not every configured Listener took its port), Stopped (the user stopped the
+Bridge), Error (no Listener took its port, or the Upstream is unreachable).
 _Avoid_: status (overloaded), mode
 
 **Exit IP Test**:

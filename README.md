@@ -21,7 +21,9 @@ any VPN that provides a local SOCKS5 proxy.
 ## What it does
 
 - One `pythonw.exe` process, no console; tray icon shows state:
-  green — running, grey — stopped, red — error (Upstream unreachable).
+  green — running, amber — degraded (a Listener could not bind, the others
+  serve), grey — stopped, red — error (no Listener bound or Upstream
+  unreachable). Hover the icon for per-Listener and Upstream status.
 - Tray menu: the `listen → socks` address line, Stop/Start, Open log,
   Exit IP Test, Settings (multiple Listeners, SOCKS Upstream, Windows
   Autostart, Apply on the fly), About… (name, version, license, repository

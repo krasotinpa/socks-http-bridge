@@ -17,7 +17,7 @@ from test_cli_config import _wait_for_listener
 from test_tunneling import establish_connect_tunnel, recv_exact
 
 
-def test_cli_bind_failure_logs_error_and_other_listeners_serve(
+def test_cli_bind_failure_logs_degraded_and_other_listeners_serve(
         tmp_path: Path, bridge_client) -> None:
     reserves = [socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 for _ in range(2)]
@@ -48,11 +48,12 @@ def test_cli_bind_failure_logs_error_and_other_listeners_serve(
             log_text = log_path.read_text(encoding="utf-8")
             assert "failed to bind" in log_text
             assert f"127.0.0.1:{taken_port}" in log_text
-            # Error from the bind failure; the healthy Upstream Probe must
-            # not flap it back to Running while the Listener is still down.
-            # (The first Probe may land before or after the bind failure.)
-            assert "-> Error" in log_text
-            assert "Error -> Running" not in log_text
+            # Degraded from the partial bind failure; the healthy Upstream
+            # Probe must not flap it back to Running while a Listener is
+            # still down. (The first Probe may land before or after the
+            # bind failure.)
+            assert "-> Degraded" in log_text
+            assert "Degraded -> Running" not in log_text
         finally:
             proc.terminate()
             proc.wait(timeout=10)

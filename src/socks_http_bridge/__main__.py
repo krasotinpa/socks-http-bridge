@@ -92,7 +92,7 @@ def main() -> None:
             srv.listen(128)
         except OSError as exc:
             # A taken port must not kill the Bridge: the other Listeners
-            # keep serving, and Bridge State reports Error.
+            # keep serving, and Bridge State reports Degraded.
             srv.close()
             log.error("Listener %s:%s failed to bind: %s",
                       listen_host, listen_port, exc)
@@ -107,7 +107,8 @@ def main() -> None:
     health.start()
     if bind_failed:
         # After start(): start() resets Listener failures, a new attempt.
-        health.listener_failed()
+        # Some Listeners serve (none bound exits above): Degraded.
+        health.listener_failed(partial=True)
 
     def _accept_loop(srv: socket.socket) -> None:
         while True:
