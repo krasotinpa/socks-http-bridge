@@ -28,7 +28,8 @@ class BridgeHealth:
     Starts Stopped; ``start`` launches the Probe (first check immediate,
     then every ``probe_interval`` seconds). ``stop`` is the explicit user
     stop: Probe results no longer change the state. A Listener that failed
-    to take its port keeps the Bridge in Error even while Probes succeed.
+    to take its port keeps the Bridge in Error even while Probes succeed,
+    until the Listener binds again or the Bridge restarts.
     """
 
     def __init__(self, upstream: tuple[str, int],
@@ -86,10 +87,17 @@ class BridgeHealth:
         self._set_state(BridgeState.STOPPED)
 
     def listener_failed(self) -> None:
-        """A Listener failed to take its port: Error until the Bridge restarts."""
+        """A Listener failed to take its port: Error until it binds again
+        or the Bridge restarts."""
         with self._lock:
             self._listener_failed = True
         self._set_state(BridgeState.ERROR)
+
+    def listener_recovered(self) -> None:
+        """Every Listener bound again: clear the failure latch; the next
+        successful Probe restores Running."""
+        with self._lock:
+            self._listener_failed = False
 
     def _probe_loop(self) -> None:
         while not self._stop.is_set():

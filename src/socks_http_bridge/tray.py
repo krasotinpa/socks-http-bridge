@@ -78,6 +78,8 @@ class TrayShell:
                                    "Socks HTTP Bridge", menu=self.menu))
         self._servers: list[socket.socket] = []
         self._clients: set[socket.socket] = set()
+        self._failed: list[tuple[str, int]] = []
+        self._retry_stop = threading.Event()
         self._last_state = BridgeState.STOPPED
         self._lock = threading.Lock()
         # Lifecycle lock: Stop/Start/Apply mutate _servers/_clients atomically.
@@ -142,7 +144,7 @@ class TrayShell:
     def _start_listeners_locked(self) -> None:
         if self._servers:
             return
-        bind_failed = False
+        self._failed = []
         for host, port in self._addresses:
             srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -154,23 +156,55 @@ class TrayShell:
                 # keep serving, and Bridge State reports Error.
                 srv.close()
                 log.error("Listener %s:%s failed to bind: %s", host, port, exc)
-                bind_failed = True
+                self._failed.append((host, port))
                 continue
             self._servers.append(srv)
             log.info("HTTP proxy on %s:%s -> SOCKS5 %s:%s",
                      host, port, *self._upstream)
             threading.Thread(target=self._accept_loop, args=(srv,),
                              daemon=True).start()
-        if not self._servers:
-            # Unlike the headless entry the tray stays alive: the user can
-            # free the port and Start again (Settings/Apply, issue #7).
-            log.error("No Listener could take its port")
-            self._health.listener_failed()
-            return
-        self._health.start()
-        if bind_failed:
+        if self._servers:
+            self._health.start()
+        if self._failed:
+            if not self._servers:
+                # Unlike the headless entry the tray stays alive: the retry
+                # below (or the user) can free the port and Start again.
+                log.error("No Listener could take its port")
             # After start(): start() resets Listener failures, a new attempt.
             self._health.listener_failed()
+            self._retry_stop = threading.Event()
+            threading.Thread(target=self._retry_failed_listeners,
+                             args=(self._retry_stop,), daemon=True,
+                             name="listener-retry").start()
+
+    def _retry_failed_listeners(self, stop: threading.Event) -> None:
+        # A Listener address can be absent at logon (the WSL adapter appears
+        # later, issue #63): rebind at the Probe cadence until it binds.
+        while not stop.wait(self._cfg.probe_interval):
+            with self._listener_lock:
+                if stop.is_set() or not self._failed:
+                    return
+                for host, port in list(self._failed):
+                    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    try:
+                        srv.bind((host, port))
+                        srv.listen(128)
+                    except OSError:
+                        srv.close()
+                        continue
+                    self._failed.remove((host, port))
+                    self._servers.append(srv)
+                    log.info("HTTP proxy on %s:%s -> SOCKS5 %s:%s (rebind)",
+                             host, port, *self._upstream)
+                    threading.Thread(target=self._accept_loop, args=(srv,),
+                                     daemon=True).start()
+                if not self._failed:
+                    # start() is a no-op while the Probe lives; it starts the
+                    # Probe when every Listener had failed at Start.
+                    self._health.start()
+                    self._health.listener_recovered()
+                    return
 
     def stop_listeners(self) -> None:
         """Close every Listener and stop the Probe (the user Stop)."""
@@ -178,6 +212,8 @@ class TrayShell:
             self._stop_listeners_locked()
 
     def _stop_listeners_locked(self) -> None:
+        self._retry_stop.set()
+        self._failed.clear()
         for srv in self._servers:
             srv.close()
         self._servers.clear()

@@ -257,6 +257,113 @@ def test_bind_failure_keeps_error_until_restart(tmp_path: Path) -> None:
         upstream.close()
 
 
+def _draining_upstream() -> socket.socket:
+    """A fake Upstream that accepts and closes Probe connections. A
+    never-accepting listener fills its backlog after the first Probe, and
+    later Probes time out (Windows) — masking the recovery under test."""
+    srv = _listener_socket()
+
+    def drain() -> None:
+        while True:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            conn.close()
+
+    threading.Thread(target=drain, daemon=True).start()
+    return srv
+
+
+def _shell_with_one_taken_listener(
+        tmp_path: Path) -> tuple[tray.TrayShell, BridgeHealth, socket.socket,
+                                 int, int, socket.socket]:
+    """Two Listeners; an exclusive taker holds the first port (issue #63).
+
+    The taker binds WITHOUT SO_REUSEADDR: on Windows two REUSEADDR sockets
+    may share a port, so the taker must be exclusive (as in the test above).
+    """
+    upstream = _draining_upstream()
+    taken = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    taken.bind(("127.0.0.1", 0))
+    taken_port = taken.getsockname()[1]
+    reserved = _listener_socket()
+    free_port = reserved.getsockname()[1]
+    reserved.close()
+    log_path = str(tmp_path / "bridge.log")
+    cfg = Config(listeners=[f"127.0.0.1:{taken_port}", f"127.0.0.1:{free_port}"],
+                 upstream=f"{upstream.getsockname()[0]}:{upstream.getsockname()[1]}",
+                 log_path=log_path, probe_interval=2)
+    health = BridgeHealth(upstream.getsockname(), probe_interval=0.05)
+    shell = tray.TrayShell(cfg, [("127.0.0.1", taken_port),
+                                 ("127.0.0.1", free_port)],
+                           upstream.getsockname(), log_path,
+                           icon=FakeIcon(), health=health)
+    return shell, health, taken, taken_port, free_port, upstream
+
+
+def test_failed_listener_rebinds_once_its_port_frees(tmp_path: Path) -> None:
+    # Issue #63: a transient bind failure (the WSL adapter is absent at
+    # logon) recovers without user action once the address is available.
+    shell, health, taken, taken_port, free_port, upstream = (
+        _shell_with_one_taken_listener(tmp_path))
+    try:
+        shell.start_listeners()
+        _wait_state(health, BridgeState.ERROR)
+        _serves(free_port)  # the other Listener keeps serving
+        taken.close()  # the port frees; nobody restarts the Bridge
+        _wait_state(health, BridgeState.RUNNING)
+        _serves(taken_port)
+        assert set(shell.listener_addresses) == {
+            ("127.0.0.1", taken_port), ("127.0.0.1", free_port)}
+    finally:
+        shell.stop_listeners()
+        taken.close()
+        upstream.close()
+
+
+def test_stop_cancels_listener_retry(tmp_path: Path) -> None:
+    # Issue #63: a Stopped Bridge never rebinds on its own.
+    shell, health, taken, taken_port, free_port, upstream = (
+        _shell_with_one_taken_listener(tmp_path))
+    try:
+        shell.start_listeners()
+        _wait_state(health, BridgeState.ERROR)
+        shell.stop_listeners()
+        taken.close()  # free the port AFTER the user Stop
+        time.sleep(2.5)  # more than one retry interval
+        assert health.state is BridgeState.STOPPED
+        _refused(taken_port)
+        _refused(free_port)
+    finally:
+        shell.stop_listeners()
+        taken.close()
+        upstream.close()
+
+
+def test_all_listeners_failed_recovers_and_starts_probe(tmp_path: Path) -> None:
+    # Issue #63: even when NO Listener bound at Start (the Probe never
+    # started), the rebind completes and Bridge State reaches Running.
+    shell, health, taken, taken_port, free_port, upstream = (
+        _shell_with_one_taken_listener(tmp_path))
+    taker2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    taker2.bind(("127.0.0.1", free_port))
+    try:
+        shell.start_listeners()
+        _wait_state(health, BridgeState.ERROR)
+        assert shell.listener_addresses == []
+        taken.close()
+        taker2.close()
+        _wait_state(health, BridgeState.RUNNING)
+        _serves(taken_port)
+        _serves(free_port)
+    finally:
+        shell.stop_listeners()
+        taken.close()
+        taker2.close()
+        upstream.close()
+
+
 def test_menu_wires_status_stubs_and_actions(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = str(tmp_path / "bridge.log")
